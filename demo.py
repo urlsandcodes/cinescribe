@@ -164,22 +164,8 @@ class StreamlitLogHandler(logging.Handler):
 # 3. Sidebar Configuration Panel
 st.sidebar.markdown("### 🎬 Configuration")
 
-# Setup preset options
-presets = {
-    "Autumn City Boulevard": "https://storage.googleapis.com/amd-hackathon-clips/1860079-uhd_2560_1440_25fps.mp4",
-    "Cat in a Garden / Jungle": "https://storage.googleapis.com/amd-hackathon-clips/13825391-uhd_3840_2160_30fps.mp4",
-    "Custom URL": ""
-}
-
-selected_preset = st.sidebar.selectbox("Choose a Video Source", list(presets.keys()))
-video_url = presets[selected_preset]
-
-# Custom video input
-if selected_preset == "Custom URL":
-    video_url = st.sidebar.text_input("Paste Remote Video URL", placeholder="https://example.com/video.mp4")
-
-# Local file upload option
-uploaded_file = st.sidebar.file_uploader("Or Upload Local Video File", type=["mp4", "mov", "avi"])
+# Local file upload option is the only video input source
+uploaded_file = st.sidebar.file_uploader("Upload Video File", type=["mp4", "mov", "avi"])
 
 # Style selection checkboxes
 st.sidebar.markdown("### 🎭 Caption Styles")
@@ -199,17 +185,14 @@ if use_humorous_tech: active_styles.append("humorous_tech")
 if use_humorous_non_tech: active_styles.append("humorous_non_tech")
 if custom_style.strip(): active_styles.append(custom_style.strip().lower().replace(" ", "_"))
 
-# VLM API settings check
+# VLM API settings check (Read key from environment variable/config directly, no UI input)
 st.sidebar.markdown("### ⚙️ API Settings")
-api_key = st.sidebar.text_input("Fireworks API Key", value=config.fireworks_api_key or "", type="password")
-
-if api_key:
-    # Dynamically apply the API key to configuration
-    config.fireworks_api_key = api_key
+if config.fireworks_api_key:
     config.vlm_provider = "fireworks"
+    st.sidebar.success("🔑 `FIREWORKS_API_KEY` loaded from environment.")
 else:
     # If no API key is provided, we can offer running in mock mode for quick UI evaluation
-    st.sidebar.warning("No Fireworks API Key provided. Running in **Mock Demo Mode**.")
+    st.sidebar.warning("⚠️ No `FIREWORKS_API_KEY` found in environment. Running in **Mock Demo Mode**.")
     config.vlm_provider = "mock"
 
 # 4. Main Panel Layout
@@ -230,11 +213,9 @@ if run_clicked:
             with open(temp_file_path, "wb") as f:
                 f.write(uploaded_file.getbuffer())
         final_video_source = str(temp_file_path.resolve())
-    elif video_url.strip():
-        final_video_source = video_url.strip()
     
     if not final_video_source:
-        st.error("Please provide a video source (select a preset, enter a custom URL, or upload a local file).")
+        st.error("Please upload a video file to begin.")
     elif not active_styles:
         st.error("Please select at least one caption style.")
     else:
