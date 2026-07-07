@@ -1,5 +1,5 @@
 from pydantic_settings import BaseSettings, SettingsConfigDict
-from pydantic import Field
+from pydantic import Field, field_validator
 from typing import Dict
 
 class Settings(BaseSettings):
@@ -17,6 +17,13 @@ class Settings(BaseSettings):
     fireworks_api_key: str = Field(default="", alias="FIREWORKS_API_KEY")
     fireworks_vlm_model: str = Field(default="accounts/fireworks/models/kimi-k2p6", alias="FIREWORKS_VLM_MODEL")
     fireworks_llm_model: str = Field(default="accounts/fireworks/models/deepseek-v4-flash", alias="FIREWORKS_LLM_MODEL")
+
+    @classmethod
+    @field_validator("fireworks_api_key", mode="before")
+    def strip_quotes(cls, v: str) -> str:
+        if isinstance(v, str):
+            return v.strip('"' + "'")
+        return v
 
     stage_timeouts: Dict[str, int] = {
         "download": 120,
