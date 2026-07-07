@@ -223,43 +223,23 @@ if run_clicked:
         st.session_state["result"] = None
         st.session_state["logs"] = []
         
-        # UI log container setup
-        st.markdown('<div class="section-header">⚙️ Real-time Pipeline Execution Logs</div>', unsafe_allow_html=True)
-        log_placeholder = st.empty()
-        
         # Async runner wrapped inside streamlit
         async def main_runner():
-            handler = StreamlitLogHandler()
-            app_logger.addHandler(handler)
-            
-            # Periodically poll and refresh the log placeholder
-            async def log_refresher():
-                while True:
-                    if st.session_state["logs"]:
-                        log_placeholder.code("\n".join(st.session_state["logs"][-15:]))
-                    await asyncio.sleep(0.3)
-                    
-            refresher_task = asyncio.create_task(log_refresher())
-            
-            try:
-                task = {
-                    "task_id": "demo-session",
-                    "video_url": final_video_source,
-                    "styles": active_styles
-                }
-                # Run the backend execution manager
-                results = await process_videos([], max_parallel=1, tasks=[task])
-                return results[0]
-            finally:
-                refresher_task.cancel()
-                app_logger.removeHandler(handler)
+            task = {
+                "task_id": "demo-session",
+                "video_url": final_video_source,
+                "styles": active_styles
+            }
+            # Run the backend execution manager
+            results = await process_videos([], max_parallel=1, tasks=[task])
+            return results[0]
 
         try:
-            with st.spinner("Running Video Intelligence Agent (Scene Extraction, Audio Transcription, VLM Analysis & Alignment)..."):
+            with st.spinner("Processing video... Please wait..."):
                 result = asyncio.run(main_runner())
                 
             if result.status == "failed":
-                st.error("Pipeline execution failed. Review the logs above for stage details.")
+                st.error("Pipeline execution failed. Please check the logs in terminal/docker stdout.")
                 if result.stage_errors:
                     st.json(result.stage_errors)
             else:
@@ -279,16 +259,6 @@ if st.session_state["result"]:
     col1, col2 = st.columns([1, 1])
     
     with col1:
-        st.markdown("### 📺 Video Player")
-        # Check if the source is a local path or a remote URL
-        if os.path.exists(res.source):
-            # Render local file upload
-            with open(res.source, "rb") as vf:
-                st.video(vf.read())
-        else:
-            # Render remote URL
-            st.video(res.source)
-            
         # Display tags
         if res.tags:
             st.markdown("#### 🏷️ Semantic Tags")
