@@ -168,8 +168,8 @@ else:
     config.vlm_provider = "mock"
 
 # 4. Main Panel Layout
-st.markdown('<div class="main-title">CineScribe AI</div>', unsafe_allow_html=True)
-st.markdown('<div class="subtitle">Next-Generation Style-Conditioned Video Intelligence and Captioning Agent</div>', unsafe_allow_html=True)
+st.markdown('<div class="main-title">CineScribe</div>', unsafe_allow_html=True)
+st.markdown('<div class="subtitle">CineScribe is an advanced video intelligence agent that combines multi-modal visual timeline analysis and audio transcripts to generate highly accurate, style-conditioned video captions across varied contexts.</div>', unsafe_allow_html=True)
 
 # Main panel video uploader (accepts only .mp4)
 uploaded_file = st.file_uploader("Upload Video File (MP4, Max 20MB)", type=["mp4"])
@@ -232,92 +232,34 @@ if run_clicked and uploaded_file is not None:
 if st.session_state["result"]:
     res = st.session_state["result"]
     
-    st.markdown('<div class="section-header">📊 Video Intelligence Dashboard</div>', unsafe_allow_html=True)
+    st.markdown('<div class="section-header">🎬 Generated Style-Conditioned Captions</div>', unsafe_allow_html=True)
     
-    col1, col2 = st.columns([1, 1])
-    
-    with col1:
-        # Display tags
-        if res.tags:
-            st.markdown("#### 🏷️ Semantic Tags")
-            tag_html = " ".join([f'<span style="background-color: #383a40; color: #FFFFFF; padding: 4px 10px; border-radius: 12px; margin-right: 5px; font-size: 0.85rem; border: 1px solid #4e5058;">{t}</span>' for t in res.tags])
-            st.markdown(tag_html, unsafe_allow_html=True)
+    # Iterate over and show the styled captions
+    if res.captions:
+        for style, text in res.captions.items():
+            nice_name = style.replace("_", " ").title()
+            header_class = f"style-{style}" if style in ["formal", "sarcastic", "humorous_tech", "humorous_non_tech"] else "style-custom"
             
-        # Performance metric cards
-        st.markdown("#### ⚡ Pipeline Execution Metrics")
-        m_col1, m_col2, m_col3 = st.columns(3)
-        with m_col1:
-            total_time_s = sum(res.timings_ms.values()) / 1000.0
-            st.markdown(f'<div class="metric-badge"><div class="metric-value">{total_time_s:.2f}s</div><div class="metric-label">Total Time</div></div>', unsafe_allow_html=True)
-        with m_col2:
-            st.markdown(f'<div class="metric-badge"><div class="metric-value">{res.duration:.1f}s</div><div class="metric-label">Video Duration</div></div>', unsafe_allow_html=True)
-        with m_col3:
-            vlm_stages = res.timings_ms.get("vlm", 0) + res.timings_ms.get("summarize", 0)
-            st.markdown(f'<div class="metric-badge"><div class="metric-value">{vlm_stages / 1000.0:.2f}s</div><div class="metric-label">LLM / VLM Overhead</div></div>', unsafe_allow_html=True)
-
-    with col2:
-        st.markdown("### 🎭 Style-Conditioned Captions")
+            icon = "👔" if style == "formal" else "😏" if style == "sarcastic" else "💻" if style == "humorous_tech" else "😄" if style == "humorous_non_tech" else "✨"
+            
+            st.markdown(f"""
+            <div class="caption-card">
+                <div class="style-header {header_class}">{icon} {nice_name}</div>
+                <div class="caption-content">{text}</div>
+            </div>
+            """, unsafe_allow_html=True)
+    else:
+        st.warning("No captions generated.")
         
-        # Iterate over and show the styled captions
-        if res.captions:
-            for style, text in res.captions.items():
-                nice_name = style.replace("_", " ").title()
-                header_class = f"style-{style}" if style in ["formal", "sarcastic", "humorous_tech", "humorous_non_tech"] else "style-custom"
-                
-                icon = "👔" if style == "formal" else "😏" if style == "sarcastic" else "💻" if style == "humorous_tech" else "😄" if style == "humorous_non_tech" else "✨"
-                
-                st.markdown(f"""
-                <div class="caption-card">
-                    <div class="style-header {header_class}">{icon} {nice_name}</div>
-                    <div class="caption-content">{text}</div>
-                </div>
-                """, unsafe_allow_html=True)
-        else:
-            st.warning("No captions generated for selected styles.")
-            
-        # Add a download results button
-        result_json_str = json.dumps({
-            "task_id": res.id,
-            "captions": res.captions or {},
-            "summary": res.summary,
-            "detailed_summary": res.detailed_summary,
-            "tags": res.tags
-        }, indent=2)
-        st.download_button(
-            label="💾 Download Captions JSON",
-            data=result_json_str,
-            file_name=f"cinescribe_{res.id}_results.json",
-            mime="application/json",
-            use_container_width=True
-        )
-
-    # Tabs for additional details (Timeline, Transcript, Technical metadata)
-    st.markdown('<div class="section-header">🔍 Deep Analysis Timeline</div>', unsafe_allow_html=True)
-    
-    t_timeline, t_transcript, t_technical = st.tabs(["🕒 Event-Aligned Timeline", "🎙️ Audio Transcript", "📋 Raw Results JSON"])
-    
-    with t_timeline:
-        if res.timeline:
-            st.markdown("Here is the structured visual timeline merged by our agent from frame-level predictions:")
-            for event in res.timeline:
-                # Format timestamp nicely using schema fields
-                time_range = f"{event.time_display} ({event.time_seconds:.1f}s) — {event.source.upper()}"
-                st.markdown(f"""
-                <div class="timeline-item">
-                    <div class="timeline-time">{time_range}</div>
-                    <div class="timeline-desc">{event.event}</div>
-                </div>
-                """, unsafe_allow_html=True)
-        else:
-            st.info("No visual timeline events found. The video might not contain clear scene changes.")
-            
-    with t_transcript:
-        if res.transcript:
-            st.markdown(f"**Speech-to-Text Transcription:**")
-            st.info(res.transcript)
-        else:
-            st.info("No audio speech detected or transcribed for this video.")
-            
-    with t_technical:
-        st.markdown("Raw data structure exported by CineScribe schema:")
-        st.json(res.model_dump())
+    # Add a download results button
+    result_json_str = json.dumps({
+        "task_id": res.id,
+        "captions": res.captions or {}
+    }, indent=2)
+    st.download_button(
+        label="💾 Download Captions JSON",
+        data=result_json_str,
+        file_name=f"cinescribe_{res.id}_results.json",
+        mime="application/json",
+        use_container_width=True
+    )
