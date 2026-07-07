@@ -1,0 +1,28 @@
+# Environment secrets
+.env
+.env.local
+
+# Virtual environments
+.venv/
+venv/
+ENV/
+env/
+
+# Python caches and compiled files
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Local workspace inputs/outputs
+temp/
+input_test/
+output_test/
+output/results.json
+
+# IDEs
+.vscode/
+.idea/
+.DS_Store
