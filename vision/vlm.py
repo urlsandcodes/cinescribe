@@ -22,6 +22,24 @@ class FireworksVLMClient:
         self.endpoint = "https://api.fireworks.ai/inference/v1/chat/completions"
 
     async def describe_frame(self, image_bytes: bytes, prompt: str) -> str:
+        # Downscale image if width > 768px to prevent VLM visual hallucinations
+        from PIL import Image
+        import io
+        try:
+            with Image.open(io.BytesIO(image_bytes)) as img:
+                w, h = img.size
+                if w > 768:
+                    ratio = 768 / w
+                    new_w = 768
+                    new_h = int(h * ratio)
+                    img = img.resize((new_w, new_h), Image.Resampling.LANCZOS)
+                    buffer = io.BytesIO()
+                    img.save(buffer, format="JPEG", quality=90)
+                    image_bytes = buffer.getvalue()
+                    logger.info(f"VLM downscaled input frame from {w}x{h} to {new_w}x{new_h} for resolution compatibility")
+        except Exception as e:
+            logger.warning(f"Failed to downscale frame image: {e}")
+
         b64_image = base64.b64encode(image_bytes).decode()
         payload = {
             "model": self.model,
