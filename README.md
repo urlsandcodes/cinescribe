@@ -1,5 +1,7 @@
 # CineScribe: High-Fidelity Style-Conditioned Video Captioning Agent
 
+![CineScribe Cover](cinescribe_cover.jpg)
+
 CineScribe is an advanced multi-modal video intelligence agent that extracts visual and audio event timelines from video clips and translates them into styled captions (Formal, Sarcastic, Humorous Tech, and Humorous Non-Tech) using serverless Fireworks AI models.
 
 ---
