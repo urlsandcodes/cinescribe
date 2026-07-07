@@ -300,12 +300,12 @@ if st.session_state["result"]:
         if res.timeline:
             st.markdown("Here is the structured visual timeline merged by our agent from frame-level predictions:")
             for event in res.timeline:
-                # Format start and end timestamps nicely
-                time_range = f"{event.start:.1f}s - {event.end:.1f}s"
+                # Format timestamp nicely using schema fields
+                time_range = f"{event.time_display} ({event.time_seconds:.1f}s) — {event.source.upper()}"
                 st.markdown(f"""
                 <div class="timeline-item">
                     <div class="timeline-time">{time_range}</div>
-                    <div class="timeline-desc">{event.description}</div>
+                    <div class="timeline-desc">{event.event}</div>
                 </div>
                 """, unsafe_allow_html=True)
         else:
