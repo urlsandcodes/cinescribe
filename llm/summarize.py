@@ -157,13 +157,27 @@ async def generate_captions(transcript: str, timeline_str: str, styles: list[str
             data = json.loads(text_clean)
             logger.info(f"LLM captioner parsed JSON: {data}")
             
-            # Find the captions dictionary. It could be under "captions" or at the root.
+            # Find the captions dictionary. Tolerates 'captions', 'captures', or nested dicts.
             captions = {}
             if isinstance(data, dict):
                 if "captions" in data and isinstance(data["captions"], dict):
                     captions = data["captions"]
+                elif "captures" in data and isinstance(data["captures"], dict):
+                    captions = data["captures"]
                 else:
-                    captions = data
+                    found_nested = False
+                    for k, v in data.items():
+                        if isinstance(v, dict):
+                            # check if any keys of v match styles
+                            for sk in styles:
+                                if sk in v or sk.lower().replace("_", "") in [str(x).lower().replace("_", "") for x in v.keys()]:
+                                    captions = v
+                                    found_nested = True
+                                    break
+                        if found_nested:
+                            break
+                    if not found_nested:
+                        captions = data
             
             # Normalize keys (strip, lowercase, replace underscores/hyphens)
             def normalize_key(k: str) -> str:
