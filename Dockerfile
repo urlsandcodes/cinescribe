@@ -25,6 +25,8 @@ COPY vision/ vision/
 COPY fusion/ fusion/
 COPY llm/ llm/
 COPY display/ display/
+COPY demo.py ./
+COPY .streamlit/ .streamlit/
 
 # Pre-create standard mount folders
 RUN mkdir -p /input /output
