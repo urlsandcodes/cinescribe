@@ -18,8 +18,8 @@ class Settings(BaseSettings):
     fireworks_vlm_model: str = Field(default="accounts/fireworks/models/kimi-k2p6", alias="FIREWORKS_VLM_MODEL")
     fireworks_llm_model: str = Field(default="accounts/fireworks/models/deepseek-v4-flash", alias="FIREWORKS_LLM_MODEL")
 
-    @classmethod
     @field_validator("fireworks_api_key", mode="before")
+    @classmethod
     def strip_quotes(cls, v: str) -> str:
         if isinstance(v, str):
             return v.strip('"' + "'")
