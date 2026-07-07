@@ -161,94 +161,72 @@ class StreamlitLogHandler(logging.Handler):
         log_entry = self.format(record)
         st.session_state["logs"].append(log_entry)
 
-# 3. Sidebar Configuration Panel
-st.sidebar.markdown("### 🎬 Configuration")
-
-# Local file upload option is the only video input source
-uploaded_file = st.sidebar.file_uploader("Upload Video File", type=["mp4", "mov", "avi"])
-
-# Style selection checkboxes
-st.sidebar.markdown("### 🎭 Caption Styles")
-use_formal = st.sidebar.checkbox("Formal", value=True)
-use_sarcastic = st.sidebar.checkbox("Sarcastic", value=True)
-use_humorous_tech = st.sidebar.checkbox("Humorous Tech", value=True)
-use_humorous_non_tech = st.sidebar.checkbox("Humorous Non-Tech", value=True)
-
-# Allow inputting a custom style name
-custom_style = st.sidebar.text_input("Add Custom Style (Optional)", placeholder="e.g. Shakespearean")
-
-# Collect active styles list
-active_styles = []
-if use_formal: active_styles.append("formal")
-if use_sarcastic: active_styles.append("sarcastic")
-if use_humorous_tech: active_styles.append("humorous_tech")
-if use_humorous_non_tech: active_styles.append("humorous_non_tech")
-if custom_style.strip(): active_styles.append(custom_style.strip().lower().replace(" ", "_"))
-
-# VLM API settings check (Read key from environment variable/config directly, no UI input)
-st.sidebar.markdown("### ⚙️ API Settings")
+# 3. Setup VLM/LLM Provider Silently based on Environment API Key
 if config.fireworks_api_key:
     config.vlm_provider = "fireworks"
-    st.sidebar.success("🔑 `FIREWORKS_API_KEY` loaded from environment.")
 else:
-    # If no API key is provided, we can offer running in mock mode for quick UI evaluation
-    st.sidebar.warning("⚠️ No `FIREWORKS_API_KEY` found in environment. Running in **Mock Demo Mode**.")
     config.vlm_provider = "mock"
 
 # 4. Main Panel Layout
 st.markdown('<div class="main-title">CineScribe AI</div>', unsafe_allow_html=True)
 st.markdown('<div class="subtitle">Next-Generation Style-Conditioned Video Intelligence and Captioning Agent</div>', unsafe_allow_html=True)
 
-# Main action button
-run_clicked = st.button("🚀 Analyze & Generate Captions", type="primary", disabled=st.session_state["processing"])
+# Main panel video uploader (accepts only .mp4)
+uploaded_file = st.file_uploader("Upload Video File (MP4, Max 20MB)", type=["mp4"])
 
-if run_clicked:
-    # Validate inputs
-    final_video_source = None
-    if uploaded_file is not None:
-        temp_dir = Path(config.temp_dir)
-        temp_dir.mkdir(parents=True, exist_ok=True)
-        temp_file_path = temp_dir / uploaded_file.name
-        with st.spinner("Saving uploaded file locally..."):
-            with open(temp_file_path, "wb") as f:
-                f.write(uploaded_file.getbuffer())
-        final_video_source = str(temp_file_path.resolve())
-    
-    if not final_video_source:
-        st.error("Please upload a video file to begin.")
-    elif not active_styles:
-        st.error("Please select at least one caption style.")
+run_clicked = False
+final_video_source = None
+
+if uploaded_file is not None:
+    if uploaded_file.size > 20 * 1024 * 1024:
+        st.error("File size exceeds the 20MB limit. Please upload a smaller video.")
     else:
-        st.session_state["processing"] = True
-        st.session_state["result"] = None
-        st.session_state["logs"] = []
-        
-        # Async runner wrapped inside streamlit
-        async def main_runner():
-            task = {
-                "task_id": "demo-session",
-                "video_url": final_video_source,
-                "styles": active_styles
-            }
-            # Run the backend execution manager
-            results = await process_videos([], max_parallel=1, tasks=[task])
-            return results[0]
+        # Show button only after upload succeeds
+        run_clicked = st.button("🎬 Generate Styled Captions", type="primary", disabled=st.session_state["processing"])
 
-        try:
-            with st.spinner("Processing video... Please wait..."):
-                result = asyncio.run(main_runner())
-                
-            if result.status == "failed":
-                st.error("Pipeline execution failed. Please check the logs in terminal/docker stdout.")
-                if result.stage_errors:
-                    st.json(result.stage_errors)
-            else:
-                st.success("Successfully processed video and aligned styles!")
-                st.session_state["result"] = result
-        except Exception as ex:
-            st.exception(ex)
-        finally:
-            st.session_state["processing"] = False
+if run_clicked and uploaded_file is not None:
+    # Save the file locally
+    temp_dir = Path(config.temp_dir)
+    temp_dir.mkdir(parents=True, exist_ok=True)
+    temp_file_path = temp_dir / uploaded_file.name
+    with st.spinner("Saving uploaded file locally..."):
+        with open(temp_file_path, "wb") as f:
+            f.write(uploaded_file.getbuffer())
+    final_video_source = str(temp_file_path.resolve())
+    
+    # Active styles are fixed (no selector needed)
+    active_styles = ["formal", "sarcastic", "humorous_tech", "humorous_non_tech"]
+    
+    st.session_state["processing"] = True
+    st.session_state["result"] = None
+    st.session_state["logs"] = []
+    
+    # Async runner wrapped inside streamlit
+    async def main_runner():
+        task = {
+            "task_id": "demo-session",
+            "video_url": final_video_source,
+            "styles": active_styles
+        }
+        # Run the backend execution manager
+        results = await process_videos([], max_parallel=1, tasks=[task])
+        return results[0]
+
+    try:
+        with st.spinner("Processing video... Please wait..."):
+            result = asyncio.run(main_runner())
+            
+        if result.status == "failed":
+            st.error("Pipeline execution failed. Please check the logs in terminal/docker stdout.")
+            if result.stage_errors:
+                st.json(result.stage_errors)
+        else:
+            st.success("Successfully processed video and aligned styles!")
+            st.session_state["result"] = result
+    except Exception as ex:
+        st.exception(ex)
+    finally:
+        st.session_state["processing"] = False
 
 # 5. Render Results Dashboard
 if st.session_state["result"]:
