@@ -82,7 +82,7 @@ def test_timeline_merger():
     sources = {e.source for e in events}
     assert "audio" in sources
     assert "vision" in sources
-    assert "ocr" in sources
+    assert "ocr" not in sources
     
     # Assert deduplication
     dup_scenes = [
@@ -92,11 +92,9 @@ def test_timeline_merger():
     collapsed = merge_and_sort_timeline([], dup_scenes)
     
     vis_events = [e for e in collapsed if e.source == "vision"]
-    ocr_events = [e for e in collapsed if e.source == "ocr"]
     
     # Near-duplicates should collapse
     assert len(vis_events) == 1
-    assert len(ocr_events) == 1
 
 @pytest.mark.asyncio
 async def test_generate_captions_mock():

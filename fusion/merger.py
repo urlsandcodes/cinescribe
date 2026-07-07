@@ -39,22 +39,25 @@ def merge_and_sort_timeline(
         start_sec = scene.start
         time_str = format_timestamp(start_sec)
         
-        # Scene Visual Description
+        # Scene Visual Description with subtly merged OCR text
         if scene.description:
+            desc = scene.description
+            if scene.ocr:
+                ocr_str = ", ".join(f'"{o}"' for o in scene.ocr)
+                desc += f" (Visible text in scene: {ocr_str})"
             raw_events.append(TimelineEvent(
                 time_seconds=start_sec,
                 time_display=time_str,
-                event=f"Visual: {scene.description}",
+                event=f"Visual: {desc}",
                 source="vision"
             ))
-            
-        # OCR Text Detected
-        for ocr_text in scene.ocr:
+        elif scene.ocr:
+            ocr_str = ", ".join(f'"{o}"' for o in scene.ocr)
             raw_events.append(TimelineEvent(
                 time_seconds=start_sec,
                 time_display=time_str,
-                event=f"OCR text: \"{ocr_text}\"",
-                source="ocr"
+                event=f"Visual: Text visible in the scene: {ocr_str}",
+                source="vision"
             ))
             
     # Sort chronologically by start seconds
