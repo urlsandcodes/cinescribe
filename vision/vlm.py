@@ -59,9 +59,7 @@ class FireworksVLMClient:
                 }
             ],
             "max_tokens": 2000,
-            "extra_body": {
-                "reasoning_effort": "none"
-            }
+            "reasoning_effort": "none"
         }
         headers = {
             "Authorization": f"Bearer {self.api_key}",

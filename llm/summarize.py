@@ -48,9 +48,7 @@ async def summarize_video(transcript: str, timeline_str: str) -> tuple[str, str,
                     {"role": "user", "content": user_prompt}
                 ],
                 "temperature": 0.2,
-                "extra_body": {
-                    "reasoning_effort": "none"
-                }
+                "reasoning_effort": "none"
             }
             headers = {
                 "Authorization": f"Bearer {config.fireworks_api_key}",
@@ -131,9 +129,7 @@ async def generate_captions(transcript: str, timeline_str: str, styles: list[str
                     {"role": "user", "content": user_prompt}
                 ],
                 "temperature": 0.6,
-                "extra_body": {
-                    "reasoning_effort": "none"
-                }
+                "reasoning_effort": "none"
             }
             headers = {
                 "Authorization": f"Bearer {config.fireworks_api_key}",
