@@ -10,11 +10,5 @@
     "video_url": "https://storage.googleapis.com/amd-hackathon-clips/13825391-uhd_3840_2160_30fps.mp4",
     "styles": ["formal", "sarcastic", "humorous_tech", "humorous_non_tech"],
     "content": "Orange kitten among green foliage in a garden"
-  },
-  {
-    "task_id": "v3",
-    "video_url": "https://storage.googleapis.com/amd-hackathon-clips/3044693-uhd_3840_2160_24fps.mp4",
-    "styles": ["formal", "sarcastic", "humorous_tech", "humorous_non_tech"],
-    "content": "Office worker at a desktop computer in a modern open-plan office"
   }
 ]

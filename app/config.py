@@ -16,7 +16,10 @@ class Settings(BaseSettings):
     vlm_provider: str = "fireworks"  # "fireworks" or "mock"
     fireworks_api_key: str = Field(default="", alias="FIREWORKS_API_KEY")
     fireworks_vlm_model: str = Field(default="accounts/fireworks/models/kimi-k2p6", alias="FIREWORKS_VLM_MODEL")
-    fireworks_llm_model: str = Field(default="accounts/fireworks/models/deepseek-v4-flash", alias="FIREWORKS_LLM_MODEL")
+    fireworks_llm_model: str = Field(default="accounts/fireworks/models/glm-5p2", alias="FIREWORKS_LLM_MODEL")
+
+    neon_db_url: str = Field(default="", alias="NEON_DB_URL")
+    is_local: bool = Field(default=False, alias="IS_LOCAL")
 
     @field_validator("*", mode="before")
     @classmethod

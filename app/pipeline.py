@@ -1,5 +1,6 @@
 import time
 import os
+import asyncio
 from pathlib import Path
 from typing import List, Dict, Any, Tuple
 
@@ -15,8 +16,9 @@ from media import ffmpeg
 from workers.executors import run_in_cpu_pool
 from audio.detector import analyze_audio
 from vision.scenes import detect_scenes
-from vision.frames import select_and_extract_frames
+from vision.frames import select_and_extract_frames, extract_temporal_frames
 from vision.vlm import get_vlm_client
+from app.db import log_caption_run, log_pipeline_error
 from vision.ocr import extract_ocr_from_vlm_text
 from vision.actions import (
     extract_actions_from_vlm_text,
@@ -25,7 +27,7 @@ from vision.actions import (
 )
 from fusion.timeline import build_timeline
 from llm.summarize import summarize_video, generate_captions
-from llm.prompts import VLM_FRAME_PROMPT
+from llm.prompts import VLM_FRAME_PROMPT, VLM_SEQUENCE_PROMPT
 
 async def run_pipeline(video_id: str, video_source: str, styles: List[str] = None) -> VideoResult:
     """
@@ -110,83 +112,78 @@ async def run_pipeline(video_id: str, video_source: str, styles: List[str] = Non
                 timings_ms["transcribe"] = int((time.time() - start_time) * 1000)
                 stage_errors["transcribe"] = str(e)
                 logger.warning(f"Audio transcription stage failed: {e}")
+                await log_pipeline_error(video_source, "transcribe", str(e), {"video_id": video_id})
                 
-        # 5. SCENE DETECTION STAGE (Optional)
-        scenes_detected = False
+        # 5. TEMPORAL FRAME EXTRACTION STAGE
+        # Extract uniformly-spaced frames directly using duration-based sampling.
+        frames_extracted = []
         start_time = time.time()
         try:
-            scenes = await run_in_cpu_pool(detect_scenes, local_video_path, video_id, duration)
-            timings_ms["scene_detect"] = int((time.time() - start_time) * 1000)
-            scenes_detected = True
+            frames_extracted = await run_in_cpu_pool(extract_temporal_frames, local_video_path, video_id, duration)
+            timings_ms["frame_extract"] = int((time.time() - start_time) * 1000)
+            # Register frame files for cleanup
+            for f in frames_extracted:
+                if f.get("path"):
+                    scratch_files.append(f["path"])
         except Exception as e:
             status = "partial"
-            timings_ms["scene_detect"] = int((time.time() - start_time) * 1000)
-            stage_errors["scene_detect"] = str(e)
-            logger.warning(f"Scene detection stage failed: {e}")
-            # Fall back to single default scene block for frame extractor
-            scenes = [(0.0, duration)]
-            
-        # 6. FRAME EXTRACTION STAGE (Optional)
-        frames_extracted = []
-        if scenes:
-            start_time = time.time()
-            try:
-                frames_extracted = await run_in_cpu_pool(select_and_extract_frames, local_video_path, video_id, scenes)
-                timings_ms["frame_extract"] = int((time.time() - start_time) * 1000)
-                # Register frame files for cleanup
-                for f in frames_extracted:
-                    if f.get("path"):
-                        scratch_files.append(f["path"])
-            except Exception as e:
-                status = "partial"
-                timings_ms["frame_extract"] = int((time.time() - start_time) * 1000)
-                stage_errors["frame_extract"] = str(e)
-                logger.warning(f"Frame extraction stage failed: {e}")
+            timings_ms["frame_extract"] = int((time.time() - start_time) * 1000)
+            stage_errors["frame_extract"] = str(e)
+            logger.warning(f"Temporal frame extraction stage failed: {e}")
+            await log_pipeline_error(video_source, "frame_extract", str(e), {"video_id": video_id})
                 
-        # 7. VLM FRAME DESCRIPTION STAGE (Optional)
+        # 6. VLM SEQUENCE DESCRIPTION STAGE
+        # Send all frames in a single multi-image API call for temporal-aware description.
+        desc = ""
+        inference_type = "scenes"
         if frames_extracted:
             start_time = time.time()
             try:
                 vlm_client = get_vlm_client()
                 images = [f["bytes"] for f in frames_extracted]
                 
-                descriptions = await vlm_client.describe_frames_batch(images, VLM_FRAME_PROMPT)
-                timings_ms["vlm"] = int((time.time() - start_time) * 1000)
+                # Construct chronological frame timing manifest to pass to the VLM
+                manifest_lines = []
+                for idx, f in enumerate(frames_extracted):
+                    manifest_lines.append(f"Frame {idx + 1}: timestamp {f['timestamp']:.2f}s")
+                manifest_text = "Chronological Frame Sequence Metadata:\n" + "\n".join(manifest_lines)
                 
-                # Parse results for each scene segment
-                for frame, raw_desc in zip(frames_extracted, descriptions):
-                    desc = extract_description_from_vlm_text(raw_desc)
-                    ocr = extract_ocr_from_vlm_text(raw_desc)
-                    actions = extract_actions_from_vlm_text(raw_desc)
-                    objects = extract_objects_from_vlm_text(raw_desc)
-                    
-                    scene_objects.append(Scene(
-                         scene_id=frame["scene_id"],
-                         start=frame["start"],
-                         end=frame["end"],
-                         description=desc,
-                         objects=objects,
-                         actions=actions,
-                         ocr=ocr
-                    ))
+                # Use multi-image sequence call with timing metadata for temporal alignment
+                raw_desc = await vlm_client.describe_frames_sequence(images, VLM_SEQUENCE_PROMPT, manifest_text=manifest_text)
+                timings_ms["vlm"] = int((time.time() - start_time) * 1000)
+                vlm_success = True
+                
+                # Parse the unified description into a single Scene object covering the whole video
+                desc = extract_description_from_vlm_text(raw_desc)
+                ocr = extract_ocr_from_vlm_text(raw_desc)
+                actions = extract_actions_from_vlm_text(raw_desc)
+                objects = extract_objects_from_vlm_text(raw_desc)
+                
+                scene_objects.append(Scene(
+                    scene_id=0,
+                    start=0.0,
+                    end=duration,
+                    description=desc,
+                    objects=objects,
+                    actions=actions,
+                    ocr=ocr
+                ))
 
-                # Log scene description table
+                # Log the unified temporal description
                 table_lines = [
                     "\n==========================================================================",
-                    "DETECTED SCENES & VLM DESCRIPTIONS",
+                    f"TEMRAPOL VLM DESCRIPTION ({len(images)} frames analyzed in single call)",
                     "==========================================================================",
                     f"+---------+---------+---------+--------------------------------------------------------+",
-                    f"| Scene # | Start   | End     | VLM Frame Description & Details                        |",
+                    f"| Frames  | Start   | End     | VLM Temporal Description & Details                     |",
                     f"+---------+---------+---------+--------------------------------------------------------+"
                 ]
-                for sc in scene_objects:
-                    # Truncate description if too long for the table cell
-                    desc_snippet = sc.description[:52] + "..." if len(sc.description) > 52 else sc.description.ljust(55)
-                    table_lines.append(f"| {str(sc.scene_id).ljust(7)} | {f'{sc.start:.2f}s'.ljust(7)} | {f'{sc.end:.2f}s'.ljust(7)} | {desc_snippet.ljust(54)} |")
-                    if sc.ocr:
-                        table_lines.append(f"|         |         |         |   OCR Detected: {str(sc.ocr)[:50].ljust(50)} |")
-                    if sc.actions:
-                        table_lines.append(f"|         |         |         |   Actions: {str(sc.actions)[:52].ljust(52)} |")
+                desc_snippet = desc[:52] + "..." if len(desc) > 52 else desc.ljust(55)
+                table_lines.append(f"| {str(len(images)).ljust(7)} | {'0.00s'.ljust(7)} | {f'{duration:.2f}s'.ljust(7)} | {desc_snippet.ljust(54)} |")
+                if ocr:
+                    table_lines.append(f"|         |         |         |   OCR Detected: {str(ocr)[:50].ljust(50)} |")
+                if actions:
+                    table_lines.append(f"|         |         |         |   Actions: {str(actions)[:52].ljust(52)} |")
                 table_lines.append(f"+---------+---------+---------+--------------------------------------------------------+")
                 table_lines.append("==========================================================================\n")
                 logger.info("\n".join(table_lines))
@@ -195,7 +192,38 @@ async def run_pipeline(video_id: str, video_source: str, styles: List[str] = Non
                 status = "partial"
                 timings_ms["vlm"] = int((time.time() - start_time) * 1000)
                 stage_errors["vlm"] = str(e)
-                logger.warning(f"VLM processing stage failed: {e}")
+                logger.warning(f"VLM sequence processing stage failed: {e}. Falling back to per-frame descriptions.")
+                await log_pipeline_error(video_source, "scenes_vlm", str(e), {"video_id": video_id})
+                
+                # Fallback: describe each frame independently using the single-frame prompt
+                try:
+                    start_time_fb = time.time()
+                    vlm_client = get_vlm_client()
+                    images = [f["bytes"] for f in frames_extracted]
+                    descriptions = await vlm_client.describe_frames_batch(images, VLM_FRAME_PROMPT)
+                    
+                    for frame, raw_desc_fb in zip(frames_extracted, descriptions):
+                        desc_fb = extract_description_from_vlm_text(raw_desc_fb)
+                        ocr_fb = extract_ocr_from_vlm_text(raw_desc_fb)
+                        actions_fb = extract_actions_from_vlm_text(raw_desc_fb)
+                        objects_fb = extract_objects_from_vlm_text(raw_desc_fb)
+                        
+                        scene_objects.append(Scene(
+                            scene_id=frame["scene_id"],
+                            start=frame["start"],
+                            end=frame["end"],
+                            description=desc_fb,
+                            objects=objects_fb,
+                            actions=actions_fb,
+                            ocr=ocr_fb
+                        ))
+                    timings_ms["vlm_fallback"] = int((time.time() - start_time_fb) * 1000)
+                    desc = " ".join([sc.description for sc in scene_objects])
+                    logger.info(f"VLM fallback completed: described {len(descriptions)} frames individually.")
+                except Exception as e2:
+                    stage_errors["vlm_fallback"] = str(e2)
+                    logger.warning(f"VLM fallback also failed: {e2}")
+                    await log_pipeline_error(video_source, "vlm_fallback", str(e2), {"video_id": video_id})
                 
         # 8. TIMELINE MERGE STAGE (Optional)
         start_time = time.time()
@@ -207,6 +235,7 @@ async def run_pipeline(video_id: str, video_source: str, styles: List[str] = Non
             timings_ms["timeline"] = int((time.time() - start_time) * 1000)
             stage_errors["timeline"] = str(e)
             logger.warning(f"Timeline merge stage failed: {e}")
+            await log_pipeline_error(video_source, "timeline", str(e), {"video_id": video_id})
             
         # 9. LLM SUMMARIZATION / CAPTIONS STAGE (Optional)
         start_time = time.time()
@@ -257,11 +286,13 @@ async def run_pipeline(video_id: str, video_source: str, styles: List[str] = Non
             timings_ms["summarize"] = int((time.time() - start_time) * 1000)
             stage_errors["summarize"] = str(e)
             logger.warning(f"LLM summarizer stage failed: {e}")
+            await log_pipeline_error(video_source, "summarize", str(e), {"video_id": video_id})
             
     except Exception as e:
         status = "failed"
         stage_errors["pipeline"] = str(e)
         logger.error(f"Video pipeline execution failed critically: {e}")
+        await log_pipeline_error(video_source, "pipeline_critical", str(e), {"video_id": video_id})
         
     finally:
         # Clean up scratch files
@@ -274,6 +305,24 @@ async def run_pipeline(video_id: str, video_source: str, styles: List[str] = Non
             except Exception as e:
                 logger.warning(f"Failed to remove scratch file {path}: {e}")
                 
+    # Trigger background logging of runs and metadata to Neon DB asynchronously
+    db_metadata = {
+        "timings_ms": timings_ms,
+        "stage_errors": stage_errors,
+        "duration": duration,
+        "resolution": f"{metadata.get('width', 0)}x{metadata.get('height', 0)}" if metadata else "unknown"
+    }
+    # Launch logging task asynchronously (fire-and-forget) to keep main loop latency zero
+    asyncio.create_task(
+        log_caption_run(
+            video_source,
+            inference_type,
+            desc,
+            captions or {},
+            db_metadata
+        )
+    )
+
     # Build and return the final VideoResult object
     return VideoResult(
         id=video_id,

@@ -82,6 +82,10 @@ async def main_async(
     results_path: str
 ) -> int:
     """Async entry wrapper that runs the analysis pipeline for the inputs."""
+    # Initialize the Neon database schema at launch
+    from app.db import initialize_database
+    initialize_database()
+
     input_path = Path(tasks_path)
     output_path = Path(results_path)
 
