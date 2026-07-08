@@ -45,9 +45,12 @@ class FireworksVLMClient:
             "model": self.model,
             "messages": [
                 {
+                    "role": "system",
+                    "content": [{"type": "text", "text": prompt}]
+                },
+                {
                     "role": "user",
                     "content": [
-                        {"type": "text", "text": prompt},
                         {
                             "type": "image_url",
                             "image_url": {"url": f"data:image/jpeg;base64,{b64_image}"}
@@ -55,7 +58,10 @@ class FireworksVLMClient:
                     ]
                 }
             ],
-            "max_tokens": 2000
+            "max_tokens": 2000,
+            "extra_body": {
+                "reasoning_effort": "none"
+            }
         }
         headers = {
             "Authorization": f"Bearer {self.api_key}",

@@ -22,7 +22,8 @@ async def summarize_video(transcript: str, timeline_str: str) -> tuple[str, str,
     Returns a tuple of (summary, detailed_summary, tags).
     """
     provider = config.vlm_provider
-    prompt = LLM_SUMMARIZE_PROMPT.format(transcript=transcript or "No transcript available.", timeline=timeline_str)
+    from llm.prompts import LLM_SUMMARIZE_SYSTEM_PROMPT, LLM_SUMMARIZE_USER_PROMPT
+    user_prompt = LLM_SUMMARIZE_USER_PROMPT.format(transcript=transcript or "No transcript available.", timeline=timeline_str)
     
     logger.info(f"Calling LLM summarizer via provider: {provider}")
     if provider == "mock":
@@ -42,8 +43,14 @@ async def summarize_video(transcript: str, timeline_str: str) -> tuple[str, str,
         try:
             payload = {
                 "model": config.fireworks_llm_model,
-                "messages": [{"role": "user", "content": prompt}],
-                "temperature": 0.2
+                "messages": [
+                    {"role": "system", "content": LLM_SUMMARIZE_SYSTEM_PROMPT},
+                    {"role": "user", "content": user_prompt}
+                ],
+                "temperature": 0.2,
+                "extra_body": {
+                    "reasoning_effort": "none"
+                }
             }
             headers = {
                 "Authorization": f"Bearer {config.fireworks_api_key}",
@@ -94,9 +101,9 @@ async def generate_captions(transcript: str, timeline_str: str, styles: list[str
     """
     Calls the Fireworks LLM to generate captions for the video in each of the requested styles.
     """
-    from llm.prompts import LLM_CAPTION_PROMPT
+    from llm.prompts import LLM_CAPTION_SYSTEM_PROMPT, LLM_CAPTION_USER_PROMPT
     provider = config.vlm_provider
-    prompt = LLM_CAPTION_PROMPT.format(
+    user_prompt = LLM_CAPTION_USER_PROMPT.format(
         transcript=transcript or "No transcript available.",
         timeline=timeline_str or "No visual timeline available.",
         styles=", ".join(styles)
@@ -119,8 +126,14 @@ async def generate_captions(transcript: str, timeline_str: str, styles: list[str
         try:
             payload = {
                 "model": config.fireworks_llm_model,
-                "messages": [{"role": "user", "content": prompt}],
-                "temperature": 0.6
+                "messages": [
+                    {"role": "system", "content": LLM_CAPTION_SYSTEM_PROMPT},
+                    {"role": "user", "content": user_prompt}
+                ],
+                "temperature": 0.6,
+                "extra_body": {
+                    "reasoning_effort": "none"
+                }
             }
             headers = {
                 "Authorization": f"Bearer {config.fireworks_api_key}",

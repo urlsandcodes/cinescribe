@@ -50,8 +50,23 @@ async def run_task_mode(input_path: Path, output_path: Path) -> int:
         # Ensure parent output directory exists (needed for custom local test runs)
         output_path.parent.mkdir(parents=True, exist_ok=True)
             
-        with open(output_path, "w") as f:
-            json.dump(submission_results, f, indent=2)
+        # Atomic write: write to a temp file in the same directory, then rename it
+        import tempfile
+        
+        dir_name = output_path.parent
+        fd, tmp_path = tempfile.mkstemp(dir=dir_name, suffix=".tmp")
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                json.dump(submission_results, f, ensure_ascii=True, indent=2)
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(tmp_path, output_path)
+        finally:
+            if os.path.exists(tmp_path):
+                try:
+                    os.remove(tmp_path)
+                except Exception:
+                    pass
             
         logger.info(f"Successfully exported final captions to: {output_path}")
         return 0
