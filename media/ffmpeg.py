@@ -89,18 +89,24 @@ def extract_audio(video_path: str, audio_output_path: str) -> str:
         logger.error(f"ffmpeg audio extraction failed: {e.stderr}")
         raise IOError(f"Failed to extract audio track: {e.stderr}")
 
-def extract_frame(video_path: str, timestamp: float, output_path: str) -> bool:
+def extract_frame(video_path: str, timestamp: float, output_path: str, longest_side: int = 1024) -> bool:
     """
-    Extracts a single video frame at the given timestamp as a JPEG image.
+    Extracts a single video frame at the given timestamp as a JPEG image,
+    natively downscaling it to ensure the longest side does not exceed longest_side.
     """
-    logger.info(f"Extracting frame at {timestamp:.2f}s -> {output_path}")
+    logger.info(f"Extracting frame at {timestamp:.2f}s (scaled to {longest_side}px) -> {output_path}")
+    
+    # Scale filter: sets longest side to longest_side, preserves aspect ratio, ensures even dimensions
+    scale_filter = f"scale=w='if(gt(iw,ih),{longest_side},-2)':h='if(gt(iw,ih),-2,{longest_side})'"
+    
     cmd = [
         FFMPEG_BIN,
         "-y",
         "-ss", f"{timestamp:.3f}",
         "-i", video_path,
+        "-vf", scale_filter,
         "-vframes", "1",
-        "-q:v", "2",
+        "-q:v", "5",  # Balance quality vs payload (~80% quality)
         output_path
     ]
     try:

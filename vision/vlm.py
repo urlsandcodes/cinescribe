@@ -98,6 +98,94 @@ class FireworksVLMClient:
             results.append(desc)
         return results
 
+    async def describe_frames_sequence(self, images: List[bytes], prompt: str, manifest_text: str = None) -> str:
+        """
+        Sends ALL images in a single API call as a chronological sequence.
+        The VLM sees the full filmstrip and can describe temporal progression, motion, and changes.
+        Returns a single unified description covering the whole video.
+        """
+        from PIL import Image
+        import io
+
+        # Build multi-image user content: one image_url block per frame
+        user_content = []
+        
+        # Prepend the timestamp manifest if provided to calibrate the VLM's timeline
+        if manifest_text:
+            user_content.append({
+                "type": "text",
+                "text": manifest_text
+            })
+            
+        for idx, image_bytes in enumerate(images):
+            # Downscale each frame if needed (legacy safety fallback, since ffmpeg now handles it)
+            try:
+                with Image.open(io.BytesIO(image_bytes)) as img:
+                    w, h = img.size
+                    if w > 1024:
+                        ratio = 1024 / w
+                        new_w = 1024
+                        new_h = int(h * ratio)
+                        img = img.resize((new_w, new_h), Image.Resampling.LANCZOS)
+                        buffer = io.BytesIO()
+                        img.save(buffer, format="JPEG", quality=85)
+                        image_bytes = buffer.getvalue()
+                        if idx == 0:
+                            logger.info(f"VLM downscaled sequence frames from {w}x{h} to {new_w}x{new_h}")
+            except Exception as e:
+                logger.warning(f"Failed to downscale sequence frame {idx}: {e}")
+
+            b64_image = base64.b64encode(image_bytes).decode()
+            user_content.append({
+                "type": "image_url",
+                "image_url": {"url": f"data:image/jpeg;base64,{b64_image}"}
+            })
+
+        logger.info(f"Sending {len(images)} frames as chronological sequence to VLM in single call")
+
+        payload = {
+            "model": self.model,
+            "messages": [
+                {
+                    "role": "system",
+                    "content": [{"type": "text", "text": prompt}]
+                },
+                {
+                    "role": "user",
+                    "content": user_content
+                }
+            ],
+            "max_tokens": 2000,
+            "reasoning_effort": "none"
+        }
+        headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json"
+        }
+
+        max_retries = 3
+        backoff = 2.0
+        for attempt in range(1, max_retries + 1):
+            try:
+                async with httpx.AsyncClient() as client:
+                    resp = await client.post(self.endpoint, json=payload, headers=headers, timeout=45.0)
+                    if resp.status_code == 429:
+                        logger.warning(f"Fireworks VLM sequence rate-limited (429). Attempt {attempt}/{max_retries}. Retrying in {backoff}s...")
+                        if attempt == max_retries:
+                            resp.raise_for_status()
+                        await asyncio.sleep(backoff)
+                        backoff *= 2.0
+                        continue
+                    resp.raise_for_status()
+                    return resp.json()["choices"][0]["message"]["content"]
+            except Exception as e:
+                logger.warning(f"Fireworks VLM sequence API error on attempt {attempt}: {e}")
+                if attempt == max_retries:
+                    raise
+                await asyncio.sleep(backoff)
+                backoff *= 2.0
+        raise IOError("Failed to describe frame sequence with Fireworks VLM")
+
 class MockVLMClient:
     """Simulates a VLM client response for keyless testing and verification."""
     def __init__(self, model: str = "mock"):

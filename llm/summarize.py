@@ -95,17 +95,70 @@ async def summarize_video(transcript: str, timeline_str: str) -> tuple[str, str,
             await asyncio.sleep(backoff)
             backoff *= 2.0
 
+async def generate_single_caption(timeline_str: str, style: str, transcript: str = None) -> str:
+    """
+    Calls the Fireworks LLM for a single style to prevent style bleed.
+    Uses static system prompts with strict length/grounding few-shot guidelines.
+    """
+    from llm.prompts import STYLE_SYSTEM_PROMPTS, STYLE_USER_PROMPT
+    
+    system_prompt = STYLE_SYSTEM_PROMPTS.get(style)
+    if not system_prompt:
+        system_prompt = f"Write a single punchy '{style}' style caption."
+        
+    user_prompt = STYLE_USER_PROMPT.format(
+        timeline=timeline_str,
+        transcript=transcript or "No spoken speech detected in audio."
+    )
+    
+    max_retries = 3
+    backoff = 2.0
+    for attempt in range(1, max_retries + 1):
+        try:
+            payload = {
+                "model": config.fireworks_llm_model,
+                "messages": [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt}
+                ],
+                "temperature": 0.7 if style != "formal" else 0.2,
+                "max_tokens": 120,
+                "reasoning_effort": "none"
+            }
+            headers = {
+                "Authorization": f"Bearer {config.fireworks_api_key}",
+                "Content-Type": "application/json"
+            }
+            async with httpx.AsyncClient() as client:
+                resp = await client.post(
+                    "https://api.fireworks.ai/inference/v1/chat/completions",
+                    json=payload, headers=headers, timeout=30.0
+                )
+                if resp.status_code == 429:
+                    logger.warning(f"Fireworks LLM {style} rate-limited (429). Attempt {attempt}/{max_retries}. Retrying in {backoff}s...")
+                    if attempt == max_retries:
+                        resp.raise_for_status()
+                    await asyncio.sleep(backoff)
+                    backoff *= 2.0
+                    continue
+                resp.raise_for_status()
+                text = resp.json()["choices"][0]["message"]["content"]
+                
+                text = clean_special_characters(text)
+                return text.strip().strip('"').strip()
+        except Exception as e:
+            logger.warning(f"LLM captioner style {style} API error on attempt {attempt}: {e}")
+            if attempt == max_retries:
+                raise
+            await asyncio.sleep(backoff)
+            backoff *= 2.0
+    return f"A video description in {style} style."
+
 async def generate_captions(transcript: str, timeline_str: str, styles: list[str]) -> dict[str, str]:
     """
-    Calls the Fireworks LLM to generate captions for the video in each of the requested styles.
+    Generates captions in each of the requested styles concurrently, incorporating audio transcript if available.
     """
-    from llm.prompts import LLM_CAPTION_SYSTEM_PROMPT, LLM_CAPTION_USER_PROMPT
     provider = config.vlm_provider
-    user_prompt = LLM_CAPTION_USER_PROMPT.format(
-        transcript=transcript or "No transcript available.",
-        timeline=timeline_str or "No visual timeline available.",
-        styles=", ".join(styles)
-    )
 
     if provider == "mock":
         logger.info("Using mock LLM captioner fallback.")
@@ -117,100 +170,18 @@ async def generate_captions(transcript: str, timeline_str: str, styles: list[str
         }
         return {s: mock_db.get(s, "A video caption.") for s in styles}
 
-    logger.info(f"Calling LLM captioner via Fireworks ({config.fireworks_llm_model})")
-    max_retries = 3
-    backoff = 2.0
-    for attempt in range(1, max_retries + 1):
-        try:
-            payload = {
-                "model": config.fireworks_llm_model,
-                "messages": [
-                    {"role": "system", "content": LLM_CAPTION_SYSTEM_PROMPT},
-                    {"role": "user", "content": user_prompt}
-                ],
-                "temperature": 0.6,
-                "reasoning_effort": "none"
-            }
-            headers = {
-                "Authorization": f"Bearer {config.fireworks_api_key}",
-                "Content-Type": "application/json"
-            }
-            async with httpx.AsyncClient() as client:
-                resp = await client.post(
-                    "https://api.fireworks.ai/inference/v1/chat/completions",
-                    json=payload, headers=headers, timeout=60.0
-                )
-                if resp.status_code == 429:
-                    logger.warning(f"Fireworks LLM rate-limited (429) during captioning. Attempt {attempt}/{max_retries}. Retrying in {backoff}s...")
-                    if attempt == max_retries:
-                        resp.raise_for_status()
-                    await asyncio.sleep(backoff)
-                    backoff *= 2.0
-                    continue
-                resp.raise_for_status()
-                text = resp.json()["choices"][0]["message"]["content"]
-
-            # Clean special characters
-            text = clean_special_characters(text)
-
-            # Clean markdown code blocks from the output if present
-            text_clean = text.strip()
-            if text_clean.startswith("```"):
-                lines = text_clean.splitlines()
-                if lines[0].startswith("```"):
-                    lines = lines[1:]
-                if lines[-1].startswith("```"):
-                    lines = lines[:-1]
-                text_clean = "\n".join(lines).strip()
-
-            data = json.loads(text_clean)
-            logger.info(f"LLM captioner parsed JSON: {data}")
+    logger.info(f"Generating {len(styles)} style captions concurrently via Fireworks ({config.fireworks_llm_model})")
+    
+    # Run all style generations concurrently to save wall-clock time
+    tasks = [generate_single_caption(timeline_str, s, transcript=transcript) for s in styles]
+    caption_results = await asyncio.gather(*tasks, return_exceptions=True)
+    
+    result = {}
+    for style, caption in zip(styles, caption_results):
+        if isinstance(caption, Exception):
+            logger.error(f"Failed to generate caption for style {style}: {caption}")
+            result[style] = f"A video description in {style} style."
+        else:
+            result[style] = caption
             
-            # Find the captions dictionary. Tolerates 'captions', 'captures', or nested dicts.
-            captions = {}
-            if isinstance(data, dict):
-                if "captions" in data and isinstance(data["captions"], dict):
-                    captions = data["captions"]
-                elif "captures" in data and isinstance(data["captures"], dict):
-                    captions = data["captures"]
-                else:
-                    found_nested = False
-                    for k, v in data.items():
-                        if isinstance(v, dict):
-                            # check if any keys of v match styles
-                            for sk in styles:
-                                if sk in v or sk.lower().replace("_", "") in [str(x).lower().replace("_", "") for x in v.keys()]:
-                                    captions = v
-                                    found_nested = True
-                                    break
-                        if found_nested:
-                            break
-                    if not found_nested:
-                        captions = data
-            
-            # Normalize keys (strip, lowercase, replace underscores/hyphens)
-            def normalize_key(k: str) -> str:
-                return str(k).lower().strip().replace("_", "").replace("-", "").replace(" ", "")
-
-            captions_clean = {normalize_key(k): str(v) for k, v in captions.items()}
-            logger.info(f"Normalized captions keys: {list(captions_clean.keys())}")
-            
-            result = {}
-            for s in styles:
-                norm_s = normalize_key(s)
-                # Fallback to key matching or generic string
-                val = captions_clean.get(norm_s)
-                if not val:
-                    # Try partial match (e.g. if style is "humorous_tech" and key is "tech")
-                    for k, v in captions_clean.items():
-                        if k in norm_s or norm_s in k:
-                            val = v
-                            break
-                result[s] = (val or f"A video description in {s} style.").strip()
-            return result
-        except Exception as e:
-            logger.warning(f"LLM captioner API error on attempt {attempt}: {e}")
-            if attempt == max_retries:
-                raise
-            await asyncio.sleep(backoff)
-            backoff *= 2.0
+    return result
