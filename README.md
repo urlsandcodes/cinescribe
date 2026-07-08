@@ -1,7 +1,5 @@
 # CineScribe: High-Fidelity Style-Conditioned Video Captioning Agent
 
-![CineScribe Cover](cinescribe_cover.png)
-
 CineScribe is an advanced multi-modal video intelligence agent that extracts visual and audio event timelines from video clips and translates them into styled captions (Formal, Sarcastic, Humorous Tech, and Humorous Non-Tech) using serverless Fireworks AI models.
 
 ---
@@ -63,20 +61,22 @@ python -m app.main --tasks-path input/tasks.json --results-path output/results.j
 
 CineScribe is fully containerized and compatible with `linux/amd64` target VMs.
 
-### 1. Build the Docker Image
-```bash
-docker build -t cinescribe:latest .
-```
-*(If building on Apple Silicon, use `docker buildx build --platform linux/amd64 -t cinescribe:latest .`)*
-
-### 2. Run Container with Mounted Volumes
-Place your task specs in a local directory `input_test/tasks.json` and run:
+### 1. Run the Container using the Published Image
+To run the public, pre-built image with your Fireworks API key and mount paths:
 
 ```bash
 docker run --rm \
-  -v "$(pwd)/input_test:/input" \
-  -v "$(pwd)/output_test:/output" \
-  cinescribe:latest
+  -e FIREWORKS_API_KEY=fw_your_key_here \
+  -v "$(pwd)/input:/input:ro" \
+  -v "$(pwd)/output:/output" \
+  urlsandcodes/cinescribe:latest
 ```
 
-The styled caption outputs will be written directly to `output_test/results.json` matching the submission schema.
+The styled caption outputs will be written directly to `output/results.json` matching the submission schema.
+
+### 2. (Optional) Rebuilding the Docker Image Locally
+If you make local modifications and need to rebuild:
+```bash
+docker build -t urlsandcodes/cinescribe:latest .
+```
+*(If building on Apple Silicon, use `docker buildx build --platform linux/amd64 -t urlsandcodes/cinescribe:latest .`)*
