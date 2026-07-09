@@ -88,31 +88,32 @@ async def run_pipeline(video_id: str, video_source: str, styles: List[str] = Non
         audio_extracted = False
         audio_output_path = str(Path(config.temp_dir) / f"{video_id}_audio.mp3")
         
-        if has_audio:
-            start_time = time.time()
-            try:
-                await run_in_cpu_pool(ffmpeg.extract_audio, local_video_path, audio_output_path)
-                scratch_files.append(audio_output_path)
-                timings_ms["extract_audio"] = int((time.time() - start_time) * 1000)
-                audio_extracted = True
-            except Exception as e:
-                status = "partial"
-                timings_ms["extract_audio"] = int((time.time() - start_time) * 1000)
-                stage_errors["extract_audio"] = str(e)
-                logger.warning(f"Audio extraction stage failed: {e}")
-                
-        # 4. TRANSCRIPTION STAGE (Optional)
-        if audio_extracted:
-            start_time = time.time()
-            try:
-                audio_analysis, audio_segments = await analyze_audio(audio_output_path)
-                timings_ms["transcribe"] = int((time.time() - start_time) * 1000)
-            except Exception as e:
-                status = "partial"
-                timings_ms["transcribe"] = int((time.time() - start_time) * 1000)
-                stage_errors["transcribe"] = str(e)
-                logger.warning(f"Audio transcription stage failed: {e}")
-                await log_pipeline_error(video_source, "transcribe", str(e), {"video_id": video_id})
+        # 3. AUDIO EXTRACTION STAGE (Disabled)
+        # if has_audio:
+        #     start_time = time.time()
+        #     try:
+        #         await run_in_cpu_pool(ffmpeg.extract_audio, local_video_path, audio_output_path)
+        #         scratch_files.append(audio_output_path)
+        #         timings_ms["extract_audio"] = int((time.time() - start_time) * 1000)
+        #         audio_extracted = True
+        #     except Exception as e:
+        #         status = "partial"
+        #         timings_ms["extract_audio"] = int((time.time() - start_time) * 1000)
+        #         stage_errors["extract_audio"] = str(e)
+        #         logger.warning(f"Audio extraction stage failed: {e}")
+        #         
+        # 4. TRANSCRIPTION STAGE (Disabled)
+        # if audio_extracted:
+        #     start_time = time.time()
+        #     try:
+        #         audio_analysis, audio_segments = await analyze_audio(audio_output_path)
+        #         timings_ms["transcribe"] = int((time.time() - start_time) * 1000)
+        #     except Exception as e:
+        #         status = "partial"
+        #         timings_ms["transcribe"] = int((time.time() - start_time) * 1000)
+        #         stage_errors["transcribe"] = str(e)
+        #         logger.warning(f"Audio transcription stage failed: {e}")
+        #         await log_pipeline_error(video_source, "transcribe", str(e), {"video_id": video_id})
                 
         # 5. TEMPORAL FRAME EXTRACTION STAGE
         # Extract uniformly-spaced frames directly using duration-based sampling.
@@ -155,7 +156,7 @@ async def run_pipeline(video_id: str, video_source: str, styles: List[str] = Non
                 
                 # Parse the unified description into a single Scene object covering the whole video
                 desc = extract_description_from_vlm_text(raw_desc)
-                ocr = extract_ocr_from_vlm_text(raw_desc)
+                ocr = []  # extract_ocr_from_vlm_text(raw_desc) (OCR parsing disabled)
                 actions = extract_actions_from_vlm_text(raw_desc)
                 objects = extract_objects_from_vlm_text(raw_desc)
                 
@@ -204,7 +205,7 @@ async def run_pipeline(video_id: str, video_source: str, styles: List[str] = Non
                     
                     for frame, raw_desc_fb in zip(frames_extracted, descriptions):
                         desc_fb = extract_description_from_vlm_text(raw_desc_fb)
-                        ocr_fb = extract_ocr_from_vlm_text(raw_desc_fb)
+                        ocr_fb = []  # extract_ocr_from_vlm_text(raw_desc_fb) (OCR parsing disabled)
                         actions_fb = extract_actions_from_vlm_text(raw_desc_fb)
                         objects_fb = extract_objects_from_vlm_text(raw_desc_fb)
                         
