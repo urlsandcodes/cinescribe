@@ -163,6 +163,8 @@ class FireworksVLMClient:
             "Content-Type": "application/json"
         }
 
+        # Step 1: Generate Draft Description
+        draft_content = ""
         max_retries = 3
         backoff = 2.0
         for attempt in range(1, max_retries + 1):
@@ -170,21 +172,68 @@ class FireworksVLMClient:
                 async with httpx.AsyncClient() as client:
                     resp = await client.post(self.endpoint, json=payload, headers=headers, timeout=45.0)
                     if resp.status_code == 429:
-                        logger.warning(f"Fireworks VLM sequence rate-limited (429). Attempt {attempt}/{max_retries}. Retrying in {backoff}s...")
+                        logger.warning(f"Fireworks VLM sequence rate-limited (429) on draft. Attempt {attempt}/{max_retries}. Retrying in {backoff}s...")
                         if attempt == max_retries:
                             resp.raise_for_status()
                         await asyncio.sleep(backoff)
                         backoff *= 2.0
                         continue
                     resp.raise_for_status()
-                    return resp.json()["choices"][0]["message"]["content"]
+                    draft_content = resp.json()["choices"][0]["message"]["content"]
+                    break
             except Exception as e:
-                logger.warning(f"Fireworks VLM sequence API error on attempt {attempt}: {e}")
+                logger.warning(f"Fireworks VLM sequence draft error on attempt {attempt}: {e}")
                 if attempt == max_retries:
-                    raise
+                    raise IOError(f"Failed to generate draft sequence description: {e}")
                 await asyncio.sleep(backoff)
                 backoff *= 2.0
-        raise IOError("Failed to describe frame sequence with Fireworks VLM")
+
+        logger.info(f"VLM Draft Description generated successfully ({len(draft_content)} chars). Initiating self-correction verification.")
+
+        # Step 2: Self-Correction Verification
+        from llm.prompts import VLM_VERIFY_PROMPT
+        verify_prompt = VLM_VERIFY_PROMPT.format(draft=draft_content)
+        
+        verify_payload = {
+            "model": self.model,
+            "messages": [
+                {
+                    "role": "system",
+                    "content": [{"type": "text", "text": verify_prompt}]
+                },
+                {
+                    "role": "user",
+                    "content": user_content
+                }
+            ],
+            "max_tokens": 2000,
+            "reasoning_effort": "none"
+        }
+
+        backoff = 2.0
+        for attempt in range(1, max_retries + 1):
+            try:
+                async with httpx.AsyncClient() as client:
+                    resp = await client.post(self.endpoint, json=verify_payload, headers=headers, timeout=45.0)
+                    if resp.status_code == 429:
+                        logger.warning(f"Fireworks VLM verification rate-limited (429). Attempt {attempt}/{max_retries}. Retrying in {backoff}s...")
+                        if attempt == max_retries:
+                            resp.raise_for_status()
+                        await asyncio.sleep(backoff)
+                        backoff *= 2.0
+                        continue
+                    resp.raise_for_status()
+                    final_content = resp.json()["choices"][0]["message"]["content"]
+                    logger.info("VLM Self-Correction verification loop completed successfully.")
+                    return final_content
+            except Exception as e:
+                logger.warning(f"Fireworks VLM verification error on attempt {attempt}: {e}")
+                if attempt == max_retries:
+                    logger.warning("Self-correction loop failed critically. Falling back to draft description.")
+                    return draft_content
+                await asyncio.sleep(backoff)
+                backoff *= 2.0
+        return draft_content
 
 class MockVLMClient:
     """Simulates a VLM client response for keyless testing and verification."""

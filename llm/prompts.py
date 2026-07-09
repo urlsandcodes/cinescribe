@@ -31,6 +31,26 @@ OBJECTS: ["object1", "object2"] or []
 Strict constraint: Do NOT write any introduction, thinking blocks, preamble, or commentary. Start directly with 'DESCRIPTION:'.
 """
 
+VLM_VERIFY_PROMPT = """You are a meticulous visual verifier. You are reviewing a draft description of a chronological sequence of video keyframes.
+
+Draft Description:
+{draft}
+
+Compare the draft against the actual visual content of the frames:
+1. Correct any inaccuracies, false assumptions, or details that are not visible.
+2. If the description is too generic, make it more specific to the actions, subjects, and objects shown.
+3. Ensure no fictional elements or brand names are introduced.
+4. Output the finalized description in the exact same format as the draft (DESCRIPTION, OCR, ACTIONS, OBJECTS).
+
+Output format:
+DESCRIPTION: Your finalized corrected description here.
+OCR: ["text1", "text2"] or []
+ACTIONS: ["action1", "action2"] or []
+OBJECTS: ["object1", "object2"] or []
+
+Strict constraint: Do NOT write any introduction, explanation of changes, or commentary. Start directly with 'DESCRIPTION:'.
+"""
+
 LLM_SUMMARIZE_PROMPT = """Analyze the following transcript and chronological timeline of events extracted from a video.
 
 Transcript:
