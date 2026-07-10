@@ -25,8 +25,6 @@ class Settings(BaseSettings):
     llm_provider: str = Field(default="huggingface", alias="LLM_PROVIDER")
     hf_api_key: str = Field(default="", alias="HF_TOKEN")
     hf_model_id: str = Field(default="google/gemma-4-31B-it", alias="HF_MODEL_ID")
-    gemini_api_key: str = Field(default="", alias="GEMINI_API_KEY")
-    gemini_model_id: str = Field(default="gemma-4-31b-it", alias="GEMINI_MODEL_ID")
     openrouter_api_key: str = Field(default="", alias="OPENROUTER_API_KEY")
     openrouter_model_id: str = Field(default="google/gemma-4-31b-it:free", alias="OPENROUTER_MODEL_ID")
 

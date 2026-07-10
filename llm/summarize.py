@@ -16,9 +16,136 @@ def clean_special_characters(text: str) -> str:
     text = text.replace("‘", "'").replace("’", "'")
     return text
 
+async def call_llm_cascade(
+    system_prompt: str,
+    user_prompt: str,
+    temperature: float = 0.7,
+    max_tokens: int = None,
+    response_format: dict = None
+) -> str:
+    """
+    Unified LLM call cascade:
+    1. Hugging Face Serverless API (Gemma-4-31B)
+    2. OpenRouter API (Gemma-4-31B Free)
+    3. Fireworks AI API (Default fallback)
+    """
+    # ==========================================
+    # TIER 1: Hugging Face Serverless API
+    # ==========================================
+    if config.hf_api_key:
+        logger.info(f"LLM Cascade: Tier 1 (Hugging Face) calling model {config.hf_model_id}")
+        try:
+            url = "https://router.huggingface.co/v1/chat/completions"
+            payload = {
+                "model": config.hf_model_id,
+                "messages": [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt}
+                ],
+                "temperature": temperature
+            }
+            if max_tokens is not None:
+                payload["max_tokens"] = max_tokens
+            if response_format is not None:
+                payload["response_format"] = response_format
+                
+            headers = {
+                "Authorization": f"Bearer {config.hf_api_key}",
+                "Content-Type": "application/json"
+            }
+            async with httpx.AsyncClient() as client:
+                resp = await client.post(url, json=payload, headers=headers, timeout=30.0)
+                resp.raise_for_status()
+                text = resp.json()["choices"][0]["message"]["content"]
+                return clean_special_characters(text)
+        except Exception as e:
+            logger.warning(f"Tier 1 (Hugging Face) failed: {e}. Falling back to Tier 2 (OpenRouter)...")
+
+    # ==========================================
+    # TIER 2: OpenRouter API
+    # ==========================================
+    if config.openrouter_api_key:
+        logger.info(f"LLM Cascade: Tier 2 (OpenRouter) calling model {config.openrouter_model_id}")
+        try:
+            url = "https://openrouter.ai/api/v1/chat/completions"
+            payload = {
+                "model": config.openrouter_model_id,
+                "messages": [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt}
+                ],
+                "temperature": temperature
+            }
+            if max_tokens is not None:
+                payload["max_tokens"] = max_tokens
+            if response_format is not None:
+                payload["response_format"] = response_format
+                
+            headers = {
+                "Authorization": f"Bearer {config.openrouter_api_key}",
+                "Content-Type": "application/json"
+            }
+            async with httpx.AsyncClient() as client:
+                resp = await client.post(url, json=payload, headers=headers, timeout=30.0)
+                resp.raise_for_status()
+                text = resp.json()["choices"][0]["message"]["content"]
+                return clean_special_characters(text)
+        except Exception as e:
+            logger.warning(f"Tier 2 (OpenRouter) failed: {e}. Falling back to Tier 3 (Fireworks)...")
+
+    # ==========================================
+    # TIER 3: Fireworks AI API
+    # ==========================================
+    logger.info(f"LLM Cascade: Tier 3 (Fireworks AI) calling model {config.fireworks_llm_model}")
+    max_retries = 3
+    backoff = 2.0
+    for attempt in range(1, max_retries + 1):
+        try:
+            payload = {
+                "model": config.fireworks_llm_model,
+                "messages": [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt}
+                ],
+                "temperature": temperature,
+                "reasoning_effort": "none"
+            }
+            if max_tokens is not None:
+                payload["max_tokens"] = max_tokens
+            if response_format is not None:
+                payload["response_format"] = response_format
+                
+            headers = {
+                "Authorization": f"Bearer {config.fireworks_api_key}",
+                "Content-Type": "application/json"
+            }
+            async with httpx.AsyncClient() as client:
+                resp = await client.post(
+                    "https://api.fireworks.ai/inference/v1/chat/completions",
+                    json=payload, headers=headers, timeout=30.0
+                )
+                if resp.status_code == 429:
+                    logger.warning(f"Fireworks LLM rate-limited (429). Attempt {attempt}/{max_retries}. Retrying in {backoff}s...")
+                    if attempt == max_retries:
+                        resp.raise_for_status()
+                    await asyncio.sleep(backoff)
+                    backoff *= 2.0
+                    continue
+                resp.raise_for_status()
+                text = resp.json()["choices"][0]["message"]["content"]
+                return clean_special_characters(text)
+        except Exception as e:
+            logger.warning(f"LLM cascade Tier 3 (Fireworks) API error on attempt {attempt}: {e}")
+            if attempt == max_retries:
+                raise
+            await asyncio.sleep(backoff)
+            backoff *= 2.0
+            
+    raise RuntimeError("LLM cascade exhausted all retries and failed.")
+
 async def summarize_video(transcript: str, timeline_str: str) -> tuple[str, str, list[str]]:
     """
-    Calls the Fireworks LLM to summarize the video transcript and event timeline.
+    Calls the LLM to summarize the video transcript and event timeline.
     Returns a tuple of (summary, detailed_summary, tags).
     """
     provider = config.vlm_provider
@@ -37,63 +164,33 @@ async def summarize_video(transcript: str, timeline_str: str) -> tuple[str, str,
         tags = ["prototype", "video-analysis", "architecture", "asyncio"]
         return summary, detailed_summary, tags
 
-    max_retries = 3
-    backoff = 2.0
-    for attempt in range(1, max_retries + 1):
-        try:
-            payload = {
-                "model": config.fireworks_llm_model,
-                "messages": [
-                    {"role": "system", "content": LLM_SUMMARIZE_SYSTEM_PROMPT},
-                    {"role": "user", "content": user_prompt}
-                ],
-                "temperature": 0.2,
-                "reasoning_effort": "none"
-            }
-            headers = {
-                "Authorization": f"Bearer {config.fireworks_api_key}",
-                "Content-Type": "application/json"
-            }
-            async with httpx.AsyncClient() as client:
-                resp = await client.post(
-                    "https://api.fireworks.ai/inference/v1/chat/completions",
-                    json=payload, headers=headers, timeout=60.0
-                )
-                if resp.status_code == 429:
-                    logger.warning(f"Fireworks LLM rate-limited (429). Attempt {attempt}/{max_retries}. Retrying in {backoff}s...")
-                    if attempt == max_retries:
-                        resp.raise_for_status()
-                    await asyncio.sleep(backoff)
-                    backoff *= 2.0
-                    continue
-                resp.raise_for_status()
-                text = resp.json()["choices"][0]["message"]["content"]
+    try:
+        text = await call_llm_cascade(
+            system_prompt=LLM_SUMMARIZE_SYSTEM_PROMPT,
+            user_prompt=user_prompt,
+            temperature=0.2,
+            response_format={"type": "json_object"}
+        )
+        
+        # Clean markdown code blocks from the output if present
+        text_clean = text.strip()
+        if text_clean.startswith("```"):
+            lines = text_clean.splitlines()
+            if lines[0].startswith("```"):
+                lines = lines[1:]
+            if lines[-1].startswith("```"):
+                lines = lines[:-1]
+            text_clean = "\n".join(lines).strip()
 
-            # Clean special characters first
-            text = clean_special_characters(text)
-
-            # Clean markdown code blocks from the output if present
-            text_clean = text.strip()
-            if text_clean.startswith("```"):
-                lines = text_clean.splitlines()
-                if lines[0].startswith("```"):
-                    lines = lines[1:]
-                if lines[-1].startswith("```"):
-                    lines = lines[:-1]
-                text_clean = "\n".join(lines).strip()
-
-            data = json.loads(text_clean)
-            return (
-                data.get("summary", "").strip(),
-                data.get("detailed_summary", "").strip(),
-                [t.strip() for t in data.get("tags", [])]
-            )
-        except Exception as e:
-            logger.warning(f"LLM summarizer API error on attempt {attempt}: {e}")
-            if attempt == max_retries:
-                raise
-            await asyncio.sleep(backoff)
-            backoff *= 2.0
+        data = json.loads(text_clean)
+        return (
+            data.get("summary", "").strip(),
+            data.get("detailed_summary", "").strip(),
+            [t.strip() for t in data.get("tags", [])]
+        )
+    except Exception as e:
+        logger.error(f"LLM summarizer failed critically in cascade: {e}")
+        raise
 
 async def generate_single_caption(
     timeline_str: str,
@@ -102,11 +199,7 @@ async def generate_single_caption(
     facts: dict = None
 ) -> str:
     """
-    Calls the LLM for a single style to prevent style bleed, using a four-tier fallback cascade:
-    1. Hugging Face Serverless API (Gemma-4-31B)
-    2. Google AI Studio OpenAI-compatible Endpoint (Gemma-2-27B)
-    3. OpenRouter API (Gemma-4-31B Free)
-    4. Fireworks AI (Default GLM-4)
+    Calls the LLM for a single style to prevent style bleed, using the unified LLM cascade.
     """
     from llm.prompts import STYLE_SYSTEM_PROMPTS, STYLE_USER_PROMPT
     
@@ -133,195 +226,47 @@ async def generate_single_caption(
             transcript=transcript or "No spoken speech detected in audio."
         )
 
-    # ==========================================
-    # TIER 1: Hugging Face Serverless API (Gemma)
-    # ==========================================
-    if config.hf_api_key:
-        logger.info(f"LLM captioner: Tier 1 (Hugging Face) calling model {config.hf_model_id} for style '{style}'")
-        try:
-            url = "https://router.huggingface.co/v1/chat/completions"
-            payload = {
-                "model": config.hf_model_id,
-                "messages": [
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_prompt}
-                ],
-                "temperature": 0.7 if style != "formal" else 0.2,
-                "max_tokens": 120
-            }
-            headers = {
-                "Authorization": f"Bearer {config.hf_api_key}",
-                "Content-Type": "application/json"
-            }
-            async with httpx.AsyncClient() as client:
-                resp = await client.post(url, json=payload, headers=headers, timeout=30.0)
-                resp.raise_for_status()
-                text = resp.json()["choices"][0]["message"]["content"]
-                text = clean_special_characters(text)
-                return text.strip().strip('"').strip()
-        except Exception as e:
-            logger.warning(f"Tier 1 (Hugging Face) Gemma failed for style '{style}': {e}. Falling back to Tier 2 (Google AI Studio)...")
-
-    # ==========================================
-    # TIER 2: Google AI Studio API (Gemma)
-    # ==========================================
-    if config.gemini_api_key:
-        logger.info(f"LLM captioner: Tier 2 (Google AI Studio) calling model {config.gemini_model_id} for style '{style}'")
-        try:
-            url = "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions"
-            payload = {
-                "model": config.gemini_model_id,
-                "messages": [
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_prompt}
-                ],
-                "temperature": 0.7 if style != "formal" else 0.2,
-                "max_tokens": 120
-            }
-            headers = {
-                "Authorization": f"Bearer {config.gemini_api_key}",
-                "Content-Type": "application/json"
-            }
-            async with httpx.AsyncClient() as client:
-                resp = await client.post(url, json=payload, headers=headers, timeout=30.0)
-                resp.raise_for_status()
-                text = resp.json()["choices"][0]["message"]["content"]
-                text = clean_special_characters(text)
-                return text.strip().strip('"').strip()
-        except Exception as e:
-            logger.warning(f"Tier 2 (Google AI Studio) Gemma failed for style '{style}': {e}. Falling back to Tier 3 (OpenRouter)...")
-
-    # ==========================================
-    # TIER 3: OpenRouter API (Gemma Free)
-    # ==========================================
-    if config.openrouter_api_key:
-        logger.info(f"LLM captioner: Tier 3 (OpenRouter) calling model {config.openrouter_model_id} for style '{style}'")
-        try:
-            url = "https://openrouter.ai/api/v1/chat/completions"
-            payload = {
-                "model": config.openrouter_model_id,
-                "messages": [
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_prompt}
-                ],
-                "temperature": 0.7 if style != "formal" else 0.2,
-                "max_tokens": 120
-            }
-            headers = {
-                "Authorization": f"Bearer {config.openrouter_api_key}",
-                "Content-Type": "application/json"
-            }
-            async with httpx.AsyncClient() as client:
-                resp = await client.post(url, json=payload, headers=headers, timeout=30.0)
-                resp.raise_for_status()
-                text = resp.json()["choices"][0]["message"]["content"]
-                text = clean_special_characters(text)
-                return text.strip().strip('"').strip()
-        except Exception as e:
-            logger.warning(f"Tier 3 (OpenRouter) Gemma failed for style '{style}': {e}. Falling back to Tier 4 (Fireworks)...")
-
-    # ==========================================
-    # TIER 4: Fireworks AI API (GLM-4 Default)
-    # ==========================================
-    logger.info(f"LLM captioner: Tier 4 (Fireworks AI) calling model {config.fireworks_llm_model} for style '{style}'")
-    max_retries = 3
-    backoff = 2.0
-    for attempt in range(1, max_retries + 1):
-        try:
-            payload = {
-                "model": config.fireworks_llm_model,
-                "messages": [
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_prompt}
-                ],
-                "temperature": 0.7 if style != "formal" else 0.2,
-                "max_tokens": 120,
-                "reasoning_effort": "none"
-            }
-            headers = {
-                "Authorization": f"Bearer {config.fireworks_api_key}",
-                "Content-Type": "application/json"
-            }
-            async with httpx.AsyncClient() as client:
-                resp = await client.post(
-                    "https://api.fireworks.ai/inference/v1/chat/completions",
-                    json=payload, headers=headers, timeout=30.0
-                )
-                if resp.status_code == 429:
-                    logger.warning(f"Fireworks LLM {style} rate-limited (429). Attempt {attempt}/{max_retries}. Retrying in {backoff}s...")
-                    if attempt == max_retries:
-                        resp.raise_for_status()
-                    await asyncio.sleep(backoff)
-                    backoff *= 2.0
-                    continue
-                resp.raise_for_status()
-                text = resp.json()["choices"][0]["message"]["content"]
-                
-                text = clean_special_characters(text)
-                return text.strip().strip('"').strip()
-        except Exception as e:
-            logger.warning(f"LLM captioner style {style} API error on attempt {attempt}: {e}")
-            if attempt == max_retries:
-                raise
-            await asyncio.sleep(backoff)
-            backoff *= 2.0
-    return f"A video description in {style} style."
+    try:
+        text = await call_llm_cascade(
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+            temperature=0.7 if style != "formal" else 0.2,
+            max_tokens=120
+        )
+        return text.strip().strip('"').strip()
+    except Exception as e:
+        logger.warning(f"LLM captioner style {style} failed: {e}. Returning fallback caption.")
+        return f"A video description in {style} style."
 
 async def extract_scene_facts(timeline_str: str) -> dict | None:
     """
-    Calls the Fireworks LLM once using VLM_EXTRACT_PROMPT to get key facts in JSON format.
+    Calls the LLM once using VLM_EXTRACT_PROMPT to get key facts in JSON format.
     """
     from llm.prompts import VLM_EXTRACT_PROMPT
     prompt = VLM_EXTRACT_PROMPT.format(description=timeline_str)
     
-    max_retries = 3
-    backoff = 2.0
-    for attempt in range(1, max_retries + 1):
-        try:
-            payload = {
-                "model": config.fireworks_llm_model,
-                "messages": [
-                    {"role": "system", "content": "You are a precise information extraction system. Output JSON only."},
-                    {"role": "user", "content": prompt}
-                ],
-                "temperature": 0.1,
-                "response_format": {"type": "json_object"}
-            }
-            headers = {
-                "Authorization": f"Bearer {config.fireworks_api_key}",
-                "Content-Type": "application/json"
-            }
-            async with httpx.AsyncClient() as client:
-                resp = await client.post(
-                    "https://api.fireworks.ai/inference/v1/chat/completions",
-                    json=payload, headers=headers, timeout=20.0
-                )
-                if resp.status_code == 429:
-                    logger.warning(f"Extract facts rate-limited. Retrying in {backoff}s...")
-                    await asyncio.sleep(backoff)
-                    backoff *= 2.0
-                    continue
-                resp.raise_for_status()
-                text = resp.json()["choices"][0]["message"]["content"].strip()
-                
-                # Clean up potential markdown wrapper code blocks if present
-                if text.startswith("```"):
-                    lines = text.splitlines()
-                    if lines[0].startswith("```"):
-                        lines = lines[1:]
-                    if lines[-1].startswith("```"):
-                        lines = lines[:-1]
-                    text = "\n".join(lines).strip()
-                
-                data = json.loads(text)
-                return data
-        except Exception as e:
-            logger.warning(f"Fact extraction failed on attempt {attempt}: {e}")
-            if attempt == max_retries:
-                return None
-            await asyncio.sleep(backoff)
-            backoff *= 2.0
-    return None
+    try:
+        text = await call_llm_cascade(
+            system_prompt="You are a precise information extraction system. Output JSON only.",
+            user_prompt=prompt,
+            temperature=0.1,
+            response_format={"type": "json_object"}
+        )
+        
+        # Clean up potential markdown wrapper code blocks if present
+        if text.startswith("```"):
+            lines = text.splitlines()
+            if lines[0].startswith("```"):
+                lines = lines[1:]
+            if lines[-1].startswith("```"):
+                lines = lines[:-1]
+            text = "\n".join(lines).strip()
+        
+        data = json.loads(text)
+        return data
+    except Exception as e:
+        logger.warning(f"Fact extraction failed in cascade: {e}")
+        return None
 
 def validate_extracted_facts(facts: dict) -> bool:
     """
