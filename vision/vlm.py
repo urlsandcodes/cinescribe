@@ -98,19 +98,14 @@ class FireworksVLMClient:
             results.append(desc)
         return results
 
-    async def describe_frames_sequence(self, images: List[bytes], prompt: str, manifest_text: str = None) -> str:
+    async def generate_draft_sequence(self, images: List[bytes], prompt: str, manifest_text: str = None) -> str:
         """
-        Sends ALL images in a single API call as a chronological sequence.
-        The VLM sees the full filmstrip and can describe temporal progression, motion, and changes.
-        Returns a single unified description covering the whole video.
+        Sends ALL images in a single API call as a chronological sequence to generate the draft.
         """
         from PIL import Image
         import io
 
-        # Build multi-image user content: one image_url block per frame
         user_content = []
-        
-        # Prepend the timestamp manifest if provided to calibrate the VLM's timeline
         if manifest_text:
             user_content.append({
                 "type": "text",
@@ -118,7 +113,6 @@ class FireworksVLMClient:
             })
             
         for idx, image_bytes in enumerate(images):
-            # Downscale each frame if needed (legacy safety fallback, since ffmpeg now handles it)
             try:
                 with Image.open(io.BytesIO(image_bytes)) as img:
                     w, h = img.size
@@ -163,8 +157,6 @@ class FireworksVLMClient:
             "Content-Type": "application/json"
         }
 
-        # Step 1: Generate Draft Description
-        draft_content = ""
         max_retries = 3
         backoff = 2.0
         for attempt in range(1, max_retries + 1):
@@ -179,8 +171,7 @@ class FireworksVLMClient:
                         backoff *= 2.0
                         continue
                     resp.raise_for_status()
-                    draft_content = resp.json()["choices"][0]["message"]["content"]
-                    break
+                    return resp.json()["choices"][0]["message"]["content"]
             except Exception as e:
                 logger.warning(f"Fireworks VLM sequence draft error on attempt {attempt}: {e}")
                 if attempt == max_retries:
@@ -188,7 +179,45 @@ class FireworksVLMClient:
                 await asyncio.sleep(backoff)
                 backoff *= 2.0
 
+    async def describe_frames_sequence(self, images: List[bytes], prompt: str, manifest_text: str = None) -> str:
+        """
+        Sends ALL images in a single API call as a chronological sequence.
+        The VLM sees the full filmstrip and can describe temporal progression, motion, and changes.
+        Returns a single unified description covering the whole video.
+        """
+        draft_content = await self.generate_draft_sequence(images, prompt, manifest_text)
         logger.info(f"VLM Draft Description generated successfully ({len(draft_content)} chars). Initiating self-correction verification.")
+
+        # Rebuild user_content, headers, and max_retries for verification step
+        from PIL import Image
+        import io
+        user_content = []
+        for idx, image_bytes in enumerate(images):
+            try:
+                with Image.open(io.BytesIO(image_bytes)) as img:
+                    w, h = img.size
+                    if w > 1024:
+                        ratio = 1024 / w
+                        new_w = 1024
+                        new_h = int(h * ratio)
+                        img = img.resize((new_w, new_h), Image.Resampling.LANCZOS)
+                        buffer = io.BytesIO()
+                        img.save(buffer, format="JPEG", quality=85)
+                        image_bytes = buffer.getvalue()
+            except Exception as e:
+                logger.warning(f"Failed to downscale sequence frame {idx}: {e}")
+
+            b64_image = base64.b64encode(image_bytes).decode()
+            user_content.append({
+                "type": "image_url",
+                "image_url": {"url": f"data:image/jpeg;base64,{b64_image}"}
+            })
+
+        headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json"
+        }
+        max_retries = 3
 
         # Step 2: Self-Correction Verification
         from llm.prompts import VLM_VERIFY_PROMPT
@@ -239,7 +268,7 @@ class MockVLMClient:
     """Simulates a VLM client response for keyless testing and verification."""
     def __init__(self, model: str = "mock"):
         self.model = model
-
+        
     async def describe_frame(self, image_bytes: bytes, prompt: str) -> str:
         import random
         descriptions = [
@@ -282,6 +311,139 @@ OBJECTS: {objects[idx]}
     async def describe_frames_batch(self, images: List[bytes], prompt: str) -> List[str]:
         return [await self.describe_frame(img, prompt) for img in images]
 
+import os
+
+class Gemma4VLMClient:
+    """
+    Cascading Gemma 4 VLM client that queries:
+    1. Google AI Studio (Tier 1)
+    2. Hugging Face Serverless (Tier 2)
+    3. OpenRouter (Tier 3)
+    """
+    def __init__(self):
+        self.gemini_api_key = config.gemini_api_key
+        self.hf_api_key = config.hf_api_key
+        self.openrouter_api_key = config.openrouter_api_key
+        
+    async def describe_frame(self, image_bytes: bytes, prompt: str) -> str:
+        descs = await self.describe_frames_batch([image_bytes], prompt)
+        return descs[0] if descs else ""
+        
+    async def describe_frames_batch(self, images: List[bytes], prompt: str) -> List[str]:
+        results = []
+        for img in images:
+            desc = await self.describe_frames_sequence([img], prompt)
+            results.append(desc)
+        return results
+
+    async def describe_frames_sequence(self, images: List[bytes], prompt: str, manifest_text: str = None) -> str:
+        full_prompt = prompt
+        if manifest_text:
+            full_prompt = f"{manifest_text}\n\n{prompt}"
+
+        # 1. TIER 1: Google AI Studio
+        if self.gemini_api_key:
+            logger.info("Gemma4VLM: Attempting Tier 1 (Google AI Studio)")
+            try:
+                url = f"https://generativelanguage.googleapis.com/v1beta/models/gemma-4-31b-it:generateContent?key={self.gemini_api_key}"
+                parts = [{"text": full_prompt}]
+                for img_bytes in images:
+                    b64_data = base64.b64encode(img_bytes).decode("utf-8")
+                    parts.append({
+                        "inlineData": {
+                            "mimeType": "image/jpeg",
+                            "data": b64_data
+                        }
+                    })
+                payload = {
+                    "contents": [{"parts": parts}]
+                }
+                async with httpx.AsyncClient() as client:
+                    resp = await client.post(url, json=payload, headers={"Content-Type": "application/json"}, timeout=45.0)
+                    if resp.status_code == 200:
+                        text = resp.json()["candidates"][0]["content"]["parts"][0]["text"]
+                        logger.info("Gemma4VLM: Google AI Studio Tier 1 Succeeded")
+                        return text
+                    else:
+                        logger.warning(f"Gemma4VLM: Google AI Studio failed with status {resp.status_code}: {resp.text}")
+            except Exception as e:
+                logger.warning(f"Gemma4VLM: Google AI Studio failed with exception: {e}")
+
+        # Limit sequence size to 5 frames to prevent Hugging Face/OpenRouter 413 limits (max 5 images)
+        sampled_images = images
+        if len(images) > 5:
+            indices = [int(i * (len(images) - 1) / 4) for i in range(5)]
+            sampled_images = [images[idx] for idx in indices]
+            logger.info(f"Gemma4VLM: Sampled down from {len(images)} to {len(sampled_images)} frames to comply with server limits.")
+
+        # 2. TIER 2: Hugging Face Serverless
+        if self.hf_api_key:
+            logger.info("Gemma4VLM: Attempting Tier 2 (Hugging Face Serverless)")
+            try:
+                url = "https://router.huggingface.co/v1/chat/completions"
+                content = [{"type": "text", "text": full_prompt}]
+                for img_bytes in sampled_images:
+                    b64_data = base64.b64encode(img_bytes).decode("utf-8")
+                    content.append({
+                        "type": "image_url",
+                        "image_url": {
+                            "url": f"data:image/jpeg;base64,{b64_data}"
+                        }
+                    })
+                payload = {
+                    "model": "google/gemma-4-31B-it",
+                    "messages": [{"role": "user", "content": content}]
+                }
+                headers = {
+                    "Authorization": f"Bearer {self.hf_api_key}",
+                    "Content-Type": "application/json"
+                }
+                async with httpx.AsyncClient() as client:
+                    resp = await client.post(url, json=payload, headers=headers, timeout=45.0)
+                    if resp.status_code == 200:
+                        text = resp.json()["choices"][0]["message"]["content"]
+                        logger.info("Gemma4VLM: Hugging Face Serverless Tier 2 Succeeded")
+                        return text
+                    else:
+                        logger.warning(f"Gemma4VLM: Hugging Face Serverless failed with status {resp.status_code}: {resp.text}")
+            except Exception as e:
+                logger.warning(f"Gemma4VLM: Hugging Face Serverless failed with exception: {e}")
+
+        # 3. TIER 3: OpenRouter
+        if self.openrouter_api_key:
+            logger.info("Gemma4VLM: Attempting Tier 3 (OpenRouter)")
+            try:
+                url = "https://openrouter.ai/api/v1/chat/completions"
+                content = [{"type": "text", "text": full_prompt}]
+                for img_bytes in sampled_images:
+                    b64_data = base64.b64encode(img_bytes).decode("utf-8")
+                    content.append({
+                        "type": "image_url",
+                        "image_url": {
+                            "url": f"data:image/jpeg;base64,{b64_data}"
+                        }
+                    })
+                payload = {
+                    "model": config.openrouter_model_id or "google/gemma-4-31b-it:free",
+                    "messages": [{"role": "user", "content": content}]
+                }
+                headers = {
+                    "Authorization": f"Bearer {self.openrouter_api_key}",
+                    "Content-Type": "application/json"
+                }
+                async with httpx.AsyncClient() as client:
+                    resp = await client.post(url, json=payload, headers=headers, timeout=45.0)
+                    if resp.status_code == 200:
+                        text = resp.json()["choices"][0]["message"]["content"]
+                        logger.info("Gemma4VLM: OpenRouter Tier 3 Succeeded")
+                        return text
+                    else:
+                        logger.warning(f"Gemma4VLM: OpenRouter failed with status {resp.status_code}: {resp.text}")
+            except Exception as e:
+                logger.warning(f"Gemma4VLM: OpenRouter failed with exception: {e}")
+
+        raise RuntimeError("Gemma4VLM: All cascade tiers failed or keys are not configured.")
+
 def get_vlm_client(provider: str | None = None) -> VLMClient:
     """Returns a configured VLM client instance."""
     provider = provider or config.vlm_provider
@@ -291,6 +453,8 @@ def get_vlm_client(provider: str | None = None) -> VLMClient:
             api_key=config.fireworks_api_key,
             model=config.fireworks_vlm_model
         )
+    if provider == "gemma4":
+        return Gemma4VLMClient()
     if provider == "mock":
         return MockVLMClient()
 

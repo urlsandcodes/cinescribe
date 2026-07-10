@@ -16,7 +16,7 @@ async def _worker(
     video_id_var.set(vid)
     
     # Lazy import to prevent circular dependency
-    from app.pipeline import run_pipeline
+    from app.cascade_pipeline import run_pipeline
     
     logger.info(f"Queued video source: {video_source} (ID={vid})")
     async with semaphore:
