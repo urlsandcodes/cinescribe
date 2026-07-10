@@ -21,6 +21,13 @@ class Settings(BaseSettings):
     neon_db_url: str = Field(default="", alias="NEON_DB_URL")
     is_local: bool = Field(default=False, alias="IS_LOCAL")
 
+    # Hosted Gemma model configuration settings
+    llm_provider: str = Field(default="huggingface", alias="LLM_PROVIDER")
+    hf_api_key: str = Field(default="", alias="HF_TOKEN")
+    hf_model_id: str = Field(default="google/gemma-2-27b-it", alias="HF_MODEL_ID")
+    together_api_key: str = Field(default="", alias="TOGETHER_API_KEY")
+    together_model_id: str = Field(default="google/gemma-2-27b-it", alias="TOGETHER_MODEL_ID")
+
     @field_validator("*", mode="before")
     @classmethod
     def strip_quotes(cls, v):

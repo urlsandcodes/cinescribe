@@ -97,8 +97,10 @@ async def summarize_video(transcript: str, timeline_str: str) -> tuple[str, str,
 
 async def generate_single_caption(timeline_str: str, style: str, transcript: str = None) -> str:
     """
-    Calls the Fireworks LLM for a single style to prevent style bleed.
-    Uses static system prompts with strict length/grounding few-shot guidelines.
+    Calls the LLM for a single style to prevent style bleed, using a three-tier fallback cascade:
+    1. Hugging Face Serverless API (Gemma-2)
+    2. Together AI API (Gemma-2)
+    3. Fireworks AI (Default GLM-4)
     """
     from llm.prompts import STYLE_SYSTEM_PROMPTS, STYLE_USER_PROMPT
     
@@ -110,7 +112,69 @@ async def generate_single_caption(timeline_str: str, style: str, transcript: str
         timeline=timeline_str,
         transcript=transcript or "No spoken speech detected in audio."
     )
-    
+
+    # ==========================================
+    # TIER 1: Hugging Face Serverless API (Gemma)
+    # ==========================================
+    if config.hf_api_key:
+        logger.info(f"LLM captioner: Tier 1 (Hugging Face) calling model {config.hf_model_id} for style '{style}'")
+        try:
+            url = f"https://api-inference.huggingface.co/models/{config.hf_model_id}/v1/chat/completions"
+            payload = {
+                "model": config.hf_model_id,
+                "messages": [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt}
+                ],
+                "temperature": 0.7 if style != "formal" else 0.2,
+                "max_tokens": 120
+            }
+            headers = {
+                "Authorization": f"Bearer {config.hf_api_key}",
+                "Content-Type": "application/json"
+            }
+            async with httpx.AsyncClient() as client:
+                resp = await client.post(url, json=payload, headers=headers, timeout=30.0)
+                resp.raise_for_status()
+                text = resp.json()["choices"][0]["message"]["content"]
+                text = clean_special_characters(text)
+                return text.strip().strip('"').strip()
+        except Exception as e:
+            logger.warning(f"Tier 1 (Hugging Face) Gemma failed for style '{style}': {e}. Falling back to Tier 2 (Together)...")
+
+    # ==========================================
+    # TIER 2: Together AI API (Gemma)
+    # ==========================================
+    if config.together_api_key:
+        logger.info(f"LLM captioner: Tier 2 (Together AI) calling model {config.together_model_id} for style '{style}'")
+        try:
+            url = "https://api.together.xyz/v1/chat/completions"
+            payload = {
+                "model": config.together_model_id,
+                "messages": [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt}
+                ],
+                "temperature": 0.7 if style != "formal" else 0.2,
+                "max_tokens": 120
+            }
+            headers = {
+                "Authorization": f"Bearer {config.together_api_key}",
+                "Content-Type": "application/json"
+            }
+            async with httpx.AsyncClient() as client:
+                resp = await client.post(url, json=payload, headers=headers, timeout=30.0)
+                resp.raise_for_status()
+                text = resp.json()["choices"][0]["message"]["content"]
+                text = clean_special_characters(text)
+                return text.strip().strip('"').strip()
+        except Exception as e:
+            logger.warning(f"Tier 2 (Together AI) Gemma failed for style '{style}': {e}. Falling back to Tier 3 (Fireworks)...")
+
+    # ==========================================
+    # TIER 3: Fireworks AI API (GLM-4 Default)
+    # ==========================================
+    logger.info(f"LLM captioner: Tier 3 (Fireworks AI) calling model {config.fireworks_llm_model} for style '{style}'")
     max_retries = 3
     backoff = 2.0
     for attempt in range(1, max_retries + 1):
@@ -170,7 +234,7 @@ async def generate_captions(transcript: str, timeline_str: str, styles: list[str
         }
         return {s: mock_db.get(s, "A video caption.") for s in styles}
 
-    logger.info(f"Generating {len(styles)} style captions concurrently via Fireworks ({config.fireworks_llm_model})")
+    logger.info(f"Generating {len(styles)} style captions concurrently via Multi-Tier Hosted Gemma Fallback Engine")
     
     # Run all style generations concurrently to save wall-clock time
     tasks = [generate_single_caption(timeline_str, s, transcript=transcript) for s in styles]

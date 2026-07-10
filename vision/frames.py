@@ -29,8 +29,8 @@ def extract_temporal_frames(video_path: str, video_id: str, duration: float) -> 
     usable_start = pad
     usable_end = max(duration - pad, pad + 0.1)
 
-    # Scale frame count relative to duration, clamping to target limits
-    num_frames = max(MIN_TEMPORAL_FRAMES, min(MAX_TEMPORAL_FRAMES, int(duration / 3) + 1))
+    # Scale frame count based on video duration: 5 frames for duration <= 10s, else 10 frames
+    num_frames = 5 if duration <= 10.0 else 10
 
     if num_frames == 1:
         timestamps = [usable_start]
