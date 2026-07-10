@@ -24,7 +24,7 @@ class Settings(BaseSettings):
     # Hosted Gemma model configuration settings
     llm_provider: str = Field(default="huggingface", alias="LLM_PROVIDER")
     hf_api_key: str = Field(default="", alias="HF_TOKEN")
-    hf_model_id: str = Field(default="google/gemma-2-27b-it", alias="HF_MODEL_ID")
+    hf_model_id: str = Field(default="google/gemma-4-31B-it", alias="HF_MODEL_ID")
     together_api_key: str = Field(default="", alias="TOGETHER_API_KEY")
     together_model_id: str = Field(default="google/gemma-2-27b-it", alias="TOGETHER_MODEL_ID")
 
