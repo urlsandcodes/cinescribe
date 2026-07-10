@@ -120,7 +120,7 @@ async def generate_single_caption(timeline_str: str, style: str, transcript: str
     if config.hf_api_key:
         logger.info(f"LLM captioner: Tier 1 (Hugging Face) calling model {config.hf_model_id} for style '{style}'")
         try:
-            url = f"https://api-inference.huggingface.co/models/{config.hf_model_id}/v1/chat/completions"
+            url = "https://router.huggingface.co/v1/chat/completions"
             payload = {
                 "model": config.hf_model_id,
                 "messages": [

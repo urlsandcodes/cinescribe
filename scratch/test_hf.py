@@ -16,7 +16,7 @@ if not HF_TOKEN:
     print("Error: HF_TOKEN is not set in your .env file!")
     exit(1)
 
-url = f"https://api-inference.huggingface.co/models/{HF_MODEL_ID}/v1/chat/completions"
+url = "https://router.huggingface.co/v1/chat/completions"
 headers = {
     "Authorization": f"Bearer {HF_TOKEN}",
     "Content-Type": "application/json"
