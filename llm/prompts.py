@@ -4,7 +4,6 @@ DESCRIPTION: A detailed description of what is happening in the frame (1-2 sente
   - Subject: appearance, clothing, features, characteristics.
   - Setting: background elements, location, weather conditions (e.g., sunny, overcast, rain, interior lights, golden hour).
   - Primary Action: motion, posture, what the subject is actively doing.
-OCR: A JSON string list of any readable text visible in the image, e.g. ["text1", "text2"]. If no text is visible, output strictly []. Do not explain why or think out loud.
 ACTIONS: A JSON string list of specific actions taking place, e.g. ["talking", "writing"]. If no actions, output strictly [].
 OBJECTS: A JSON string list of primary objects visible, e.g. ["whiteboard", "laptop"]. If no objects, output strictly [].
 
@@ -24,7 +23,6 @@ Describe the video as a whole by examining what stays the same and what changes 
 
 Output your analysis in this exact format:
 DESCRIPTION: A detailed 3-5 sentence description covering setting, subjects, actions, motion direction, and temporal progression across the video.
-OCR: ["text1", "text2"] or []
 ACTIONS: ["action1", "action2"] or []
 OBJECTS: ["object1", "object2"] or []
 
@@ -40,13 +38,12 @@ Compare the draft against the actual visual content of the frames:
 1. Correct any inaccuracies, false assumptions, or details that are not visible.
 2. If the description is too generic, make it more specific to the actions, subjects, and objects shown.
 3. Ensure no fictional elements or brand names are introduced.
-4. Output the finalized description in the exact same format as the draft (DESCRIPTION, OCR, ACTIONS, OBJECTS).
+4. Output the finalized description in the exact same format as the draft (DESCRIPTION, ACTIONS, OBJECTS).
  
 Critical rule: Write the finalized description as if from scratch. Do NOT reference the draft, what was wrong with it, or what was removed/corrected. Never write negative statements like "no X is visible" unless X is a natural, relevant, and notable absence in the scene itself (e.g. "no people are present" is fine for an empty landscape; "no window with curtains is visible" is not, because curtains were never a relevant detail to begin with). The output must read like a clean, standalone description, with zero trace of the editing process.
  
 Output format:
 DESCRIPTION: Your finalized corrected description here.
-OCR: ["text1", "text2"] or []
 ACTIONS: ["action1", "action2"] or []
 OBJECTS: ["object1", "object2"] or []
  
@@ -162,10 +159,65 @@ Caption: Riding off into the sunset would hit different if the sun weren't also 
 """
 }
 
-STYLE_USER_PROMPT = """Video Description Timeline:
-{timeline}
 
+
+VLM_EXTRACT_PROMPT = """You are extracting the key facts from a verified video description, to be used later for caption generation.
+ 
+Verified Description:
+{description}
+ 
+Extract the following. Be concrete and specific — use nouns and verbs a reader could picture, not vague categories.
+ 
+PRIMARY_SUBJECT: The single most important subject(s) in the scene, described concretely (e.g. "a light-colored cat" not "an animal"; "three people at a table" not "people").If there is no person, animal, or object that acts as a clear 'actor' (e.g. a landscape, sky, or seascape shot), set PRIMARY_SUBJECT to the most prominent visual element instead (e.g. 'the sun and horizon', 'a forested cliff and shoreline', 'layered mountain ridges'). Do not invent a subject that is not present.
+PRIMARY_ACTION: The main action or motion happening, including direction/change if relevant (e.g. "camera pans slowly left to right revealing a skyline at dusk", not "camera moves").If nothing has agency, describe what changes or moves instead — light, water, camera movement, weather (e.g. 'sun sinks slowly toward the horizon while the sky deepens from pink to purple', 'camera pans slowly left revealing more coastline', 'waves roll in continuously, foam patterns shifting'). If truly nothing changes across the sequence, say so explicitly (e.g. 'scene remains static; only ripples on the water surface shift subtly').
+NOTABLE_DETAIL: One specific, vivid, non-obvious visual detail that would make a caption feel grounded in THIS scene rather than a generic one (a color, an object, a contrast, an unusual element). Prefer something visually distinctive over something generic.
+SETTING: A short phrase for where/when this is happening (e.g. "urban rooftop patio, daylight", "rainy night, inside a moving vehicle").
+ 
+Output strictly as JSON, no markdown, no commentary:
+{{
+  "primary_subject": "...",
+  "primary_action": "...",
+  "notable_detail": "...",
+  "setting": "..."
+}}
+"""
+
+
+STYLE_USER_PROMPT = """Primary Subject: {primary_subject}
+Primary Action: {primary_action}
+Notable Detail: {notable_detail}
+Setting: {setting}
+ 
+Full Scene Description (context only, do not just copy from this):
+{timeline}
+ 
 Optional Transcript:
 {transcript}
-
+ 
 Caption:"""
+
+
+CAPTION_VERIFY_PROMPT = """You are checking a generated caption against two criteria before it is finalized.
+ 
+Scene facts:
+Primary Subject: {primary_subject}
+Primary Action: {primary_action}
+Notable Detail: {notable_detail}
+ 
+Intended Style: {style_name}
+Draft Caption: {draft_caption}
+ 
+Check:
+1. ACCURACY: Could a reader who has not seen the video correctly guess the primary subject and action from this caption alone? If not, this fails.
+2. STYLE FIT: Does the tone clearly match the intended style ({style_name}), and is it genuinely distinctive/funny where relevant (not a generic template that could apply to any video)?
+ 
+If the draft caption passes both checks, output it unchanged.
+If it fails either check, output a rewritten caption that fixes the issue while keeping the same style and staying within 1-2 short sentences.
+ 
+Output strictly as JSON, no markdown, no commentary:
+{{
+  "passed": true/false,
+  "final_caption": "..."
+}}
+"""
+ 

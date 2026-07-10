@@ -95,7 +95,12 @@ async def summarize_video(transcript: str, timeline_str: str) -> tuple[str, str,
             await asyncio.sleep(backoff)
             backoff *= 2.0
 
-async def generate_single_caption(timeline_str: str, style: str, transcript: str = None) -> str:
+async def generate_single_caption(
+    timeline_str: str,
+    style: str,
+    transcript: str = None,
+    facts: dict = None
+) -> str:
     """
     Calls the LLM for a single style to prevent style bleed, using a four-tier fallback cascade:
     1. Hugging Face Serverless API (Gemma-4-31B)
@@ -109,10 +114,24 @@ async def generate_single_caption(timeline_str: str, style: str, transcript: str
     if not system_prompt:
         system_prompt = f"Write a single punchy '{style}' style caption."
         
-    user_prompt = STYLE_USER_PROMPT.format(
-        timeline=timeline_str,
-        transcript=transcript or "No spoken speech detected in audio."
-    )
+    if facts:
+        user_prompt = STYLE_USER_PROMPT.format(
+            primary_subject=facts.get("primary_subject", "Not extracted (refer to description)"),
+            primary_action=facts.get("primary_action", "Not extracted (refer to description)"),
+            notable_detail=facts.get("notable_detail", "Not extracted (refer to description)"),
+            setting=facts.get("setting", "Not extracted (refer to description)"),
+            timeline=timeline_str,
+            transcript=transcript or "No spoken speech detected in audio."
+        )
+    else:
+        user_prompt = STYLE_USER_PROMPT.format(
+            primary_subject="Not extracted (refer to description)",
+            primary_action="Not extracted (refer to description)",
+            notable_detail="Not extracted (refer to description)",
+            setting="Not extracted (refer to description)",
+            timeline=timeline_str,
+            transcript=transcript or "No spoken speech detected in audio."
+        )
 
     # ==========================================
     # TIER 1: Hugging Face Serverless API (Gemma)
@@ -248,9 +267,80 @@ async def generate_single_caption(timeline_str: str, style: str, transcript: str
             backoff *= 2.0
     return f"A video description in {style} style."
 
+async def extract_scene_facts(timeline_str: str) -> dict | None:
+    """
+    Calls the Fireworks LLM once using VLM_EXTRACT_PROMPT to get key facts in JSON format.
+    """
+    from llm.prompts import VLM_EXTRACT_PROMPT
+    prompt = VLM_EXTRACT_PROMPT.format(description=timeline_str)
+    
+    max_retries = 3
+    backoff = 2.0
+    for attempt in range(1, max_retries + 1):
+        try:
+            payload = {
+                "model": config.fireworks_llm_model,
+                "messages": [
+                    {"role": "system", "content": "You are a precise information extraction system. Output JSON only."},
+                    {"role": "user", "content": prompt}
+                ],
+                "temperature": 0.1,
+                "response_format": {"type": "json_object"}
+            }
+            headers = {
+                "Authorization": f"Bearer {config.fireworks_api_key}",
+                "Content-Type": "application/json"
+            }
+            async with httpx.AsyncClient() as client:
+                resp = await client.post(
+                    "https://api.fireworks.ai/inference/v1/chat/completions",
+                    json=payload, headers=headers, timeout=20.0
+                )
+                if resp.status_code == 429:
+                    logger.warning(f"Extract facts rate-limited. Retrying in {backoff}s...")
+                    await asyncio.sleep(backoff)
+                    backoff *= 2.0
+                    continue
+                resp.raise_for_status()
+                text = resp.json()["choices"][0]["message"]["content"].strip()
+                
+                # Clean up potential markdown wrapper code blocks if present
+                if text.startswith("```"):
+                    lines = text.splitlines()
+                    if lines[0].startswith("```"):
+                        lines = lines[1:]
+                    if lines[-1].startswith("```"):
+                        lines = lines[:-1]
+                    text = "\n".join(lines).strip()
+                
+                data = json.loads(text)
+                return data
+        except Exception as e:
+            logger.warning(f"Fact extraction failed on attempt {attempt}: {e}")
+            if attempt == max_retries:
+                return None
+            await asyncio.sleep(backoff)
+            backoff *= 2.0
+    return None
+
+def validate_extracted_facts(facts: dict) -> bool:
+    """
+    Validates that the extracted facts is a dictionary and contains all 4 required non-empty string keys.
+    """
+    if not isinstance(facts, dict):
+        return False
+    required_keys = ["primary_subject", "primary_action", "notable_detail", "setting"]
+    for k in required_keys:
+        if k not in facts:
+            return False
+        if not isinstance(facts[k], str) or not facts[k].strip():
+            return False
+    return True
+
 async def generate_captions(transcript: str, timeline_str: str, styles: list[str]) -> dict[str, str]:
     """
     Generates captions in each of the requested styles concurrently, incorporating audio transcript if available.
+    Uses a single shared extraction step so all style calls work from identical facts.
     """
     provider = config.vlm_provider
 
@@ -264,10 +354,19 @@ async def generate_captions(transcript: str, timeline_str: str, styles: list[str
         }
         return {s: mock_db.get(s, "A video caption.") for s in styles}
 
+    # Call the VLM extraction step (once per clip)
+    logger.info("Calling VLM key facts extraction step (once per clip)...")
+    facts = await extract_scene_facts(timeline_str)
+    if facts and validate_extracted_facts(facts):
+        logger.info(f"Successfully extracted and validated scene facts: {json.dumps(facts)}")
+    else:
+        logger.warning("Fact extraction failed or returned invalid fields. Falling back to raw scene description.")
+        facts = None
+
     logger.info(f"Generating {len(styles)} style captions concurrently via Multi-Tier Hosted Gemma Fallback Engine")
     
-    # Run all style generations concurrently to save wall-clock time
-    tasks = [generate_single_caption(timeline_str, s, transcript=transcript) for s in styles]
+    # Run all style generations concurrently with shared facts to save wall-clock time
+    tasks = [generate_single_caption(timeline_str, s, transcript=transcript, facts=facts) for s in styles]
     caption_results = await asyncio.gather(*tasks, return_exceptions=True)
     
     result = {}
