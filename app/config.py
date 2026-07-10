@@ -25,8 +25,10 @@ class Settings(BaseSettings):
     llm_provider: str = Field(default="huggingface", alias="LLM_PROVIDER")
     hf_api_key: str = Field(default="", alias="HF_TOKEN")
     hf_model_id: str = Field(default="google/gemma-4-31B-it", alias="HF_MODEL_ID")
-    together_api_key: str = Field(default="", alias="TOGETHER_API_KEY")
-    together_model_id: str = Field(default="google/gemma-2-27b-it", alias="TOGETHER_MODEL_ID")
+    gemini_api_key: str = Field(default="", alias="GEMINI_API_KEY")
+    gemini_model_id: str = Field(default="gemma-2-27b-it", alias="GEMINI_MODEL_ID")
+    openrouter_api_key: str = Field(default="", alias="OPENROUTER_API_KEY")
+    openrouter_model_id: str = Field(default="google/gemma-4-31b-it:free", alias="OPENROUTER_MODEL_ID")
 
     @field_validator("*", mode="before")
     @classmethod
